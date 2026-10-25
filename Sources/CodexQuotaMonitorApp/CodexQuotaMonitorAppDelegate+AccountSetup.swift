@@ -4,18 +4,23 @@ import SwiftUI
 import CodexQuotaMonitorKit
 
 extension CodexQuotaMonitorAppDelegate: NSWindowDelegate {
-    /// 최초 계정 등록 완료 전의 실행에서만 연결 가이드 표시
+    /// 최초 미등록 또는 설정 불일치 상태의 자동 연결 가이드 표시
     func openAccountSetupIfNeeded() {
         guard preferences.requiresAccountSetup else { return }
+        openAccountSetup()
+    }
+
+    /// 최초 연결·전체 삭제 후 재연결·추가 계정에서 공용 가이드 표시
+    func openAccountSetup() {
         if let accountSetupWindow {
             accountSetupWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let model = AccountSetupModel()
+        let model = AccountSetupModel(isRecovery: preferences.needsAccountRecovery)
         let window = AccountSetupWindow.make(
             model: model,
-            onComplete: { [weak self] path in self?.registerInitialAccount(path: path) },
+            onComplete: { [weak self] path in self?.registerConnectedAccount(path: path) },
             onLater: { [weak self] in self?.accountSetupWindow?.close() }
         )
         window.delegate = self
@@ -27,19 +32,12 @@ extension CodexQuotaMonitorAppDelegate: NSWindowDelegate {
     }
 
     /// 확인된 한 계정 경로 저장과 해당 슬롯 표시 활성화
-    private func registerInitialAccount(path: String) {
-        guard preferences.requiresAccountSetup,
-              let index = preferences.accountPaths.firstIndex(of: "") else { return }
-        var paths = preferences.accountPaths
-        paths[index] = path
-        var enabled = preferences.enabledAccountIDs
-        let id = "C\(index + 1)"
-        if !enabled.contains(id) { enabled.append(id) }
-        guard preferences.registerAccountPaths(paths, enabledIDs: enabled) else {
+    private func registerConnectedAccount(path: String) {
+        guard preferences.registerAccount(path: path) != nil else {
             accountSetupModel?.reportRegistrationFailure(preferences.persistenceError ?? "설정을 반영하지 못했습니다. 다시 시도해 주세요.")
             return
         }
-        applyAccountPaths(paths)
+        applySavedAccountPaths()
     }
 
     /// 가이드 닫기 시 진행 중 조회와 미저장 초안 폐기

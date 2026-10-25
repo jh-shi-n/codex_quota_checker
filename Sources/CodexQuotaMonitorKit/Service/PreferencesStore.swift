@@ -98,6 +98,8 @@ public final class PreferencesStore: ObservableObject {
     private let fileSystem: AccountPathFileSystem
     public private(set) var hasRegisteredAccount = false
     public private(set) var firstAccountRegisteredAt: Date?
+    /// 사용자에 의한 전체 삭제와 등록 이력만 남은 설정 불일치의 구분
+    public private(set) var accountPathsWereRemoved = false
     /// 시작 시 config.json 부재와 기존 등록 이력 부재를 함께 확인한 최초 실행
     public private(set) var isFirstLaunch = false
     /// 앱 시작 시 기록한 파일 존재 여부; 시작 중 생성 이후에도 동일 값 유지
@@ -111,6 +113,7 @@ public final class PreferencesStore: ObservableObject {
         var settings: AppPreferencesPayload
         var hasRegisteredAccount: Bool
         var firstAccountRegisteredAt: Date?
+        var accountPathsWereRemoved: Bool? = nil
     }
 
     @Published public private(set) var cacheError: String?
@@ -147,6 +150,7 @@ public final class PreferencesStore: ObservableObject {
                 guard loaded.schemaVersion == 1, loaded.settings.accountPaths.count == Self.accountPathCount,
                       loaded.hasRegisteredAccount || loaded.firstAccountRegisteredAt == nil,
                       loaded.hasRegisteredAccount || !loaded.settings.accountPaths.contains(where: { !$0.isEmpty }),
+                      loaded.accountPathsWereRemoved != true || (loaded.hasRegisteredAccount && loaded.settings.accountPaths.allSatisfy({ $0.isEmpty })),
                       loaded.firstAccountRegisteredAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true
                 else { throw CocoaError(.coderReadCorrupt) }
                 bundle = loaded
@@ -171,6 +175,7 @@ public final class PreferencesStore: ObservableObject {
             }
             self.hasRegisteredAccount = bundle.hasRegisteredAccount
             self.firstAccountRegisteredAt = bundle.firstAccountRegisteredAt
+            self.accountPathsWereRemoved = bundle.accountPathsWereRemoved == true
             // 파일 선행 저장 직후 중단된 경우에도 완료 이력의 false 회귀 방지
             if let history = try? configurationFile?.read()?.installation,
                history.hasRegisteredAccount {
@@ -266,12 +271,14 @@ public final class PreferencesStore: ObservableObject {
     /// 계정 표시 활성화 여부와 독립적인 등록 경로 존재 여부
     public var hasRegisteredAccounts: Bool { accountPaths.contains { !$0.isEmpty } }
 
-    /// 첫 실행 또는 등록 미완료 상태의 연결 가이드 분기; 기존 등록 이력 우선
+    /// 실제 경로가 없는 등록 완료 이력의 복구 필요 여부
+    public var needsAccountRecovery: Bool {
+        hasRegisteredAccount && !hasRegisteredAccounts && !accountPathsWereRemoved
+    }
+
+    /// 최초 미등록·설정 불일치의 가이드 표시와 명시적 전체 삭제 이후 자동 표시 방지
     public var requiresAccountSetup: Bool {
-        guard !hasRegisteredAccount, !hasRegisteredAccounts else { return false }
-        if isFirstLaunch { return true }
-        // 파일은 존재하지만 등록을 마치지 않은 다음 실행의 가이드 유지
-        return configurationFileWasPresentAtLaunch || configurationFile == nil
+        !hasRegisteredAccounts && !accountPathsWereRemoved
     }
 
     /// Compatibility alias for settings views that use the shorter name.
@@ -393,10 +400,11 @@ public final class PreferencesStore: ObservableObject {
     }
 
     /// 사전 알림 시점 저장; 도달 시각 재조회와 알림은 별도 유지
-    public func updateResetReminder(minutes: Int) {
-        guard !settingsLoadFailed else { return }
+    @discardableResult
+    public func updateResetReminder(minutes: Int) -> Bool {
+        guard !settingsLoadFailed else { return false }
         resetReminderMinutes = Self.normalizedResetReminderMinutes(minutes)
-        persist()
+        return persist()
     }
 
     /// 자동 Ping 선택의 영속 저장 및 저장 실패 시 기존 설정 복원
@@ -432,7 +440,9 @@ public final class PreferencesStore: ObservableObject {
         let previous = currentPayload
         let previousRegistered = hasRegisteredAccount
         let previousDate = firstAccountRegisteredAt
+        let previousRemoved = accountPathsWereRemoved
         accountPaths = normalized
+        accountPathsWereRemoved = false
         if let enabledIDs { enabledAccountIDs = Self.normalizedAccountIDs(enabledIDs) }
         if !hasRegisteredAccount {
             hasRegisteredAccount = true
@@ -442,9 +452,34 @@ public final class PreferencesStore: ObservableObject {
             restore(previous)
             hasRegisteredAccount = previousRegistered
             firstAccountRegisteredAt = previousDate
+            accountPathsWereRemoved = previousRemoved
             return false
         }
         return true
+    }
+
+    /// 기존 계정 보존 및 동일 폴더 재연결 시 슬롯 재사용과 표시 활성화
+    public func registerAccount(path: String, now: Date = Date()) -> String? {
+        guard !settingsLoadFailed else { return nil }
+        let normalized = normalizedAccountPath(path)
+        guard validateAccountPath(normalized) == .valid else {
+            persistenceError = "연결할 계정 폴더를 다시 확인해 주세요."
+            return nil
+        }
+        let resolved = URL(fileURLWithPath: normalized).resolvingSymlinksInPath().path
+        let existing = accountPaths.firstIndex { path in
+            !path.isEmpty && URL(fileURLWithPath: path).resolvingSymlinksInPath().path == resolved
+        }
+        guard let index = existing ?? accountPaths.firstIndex(of: "") else {
+            persistenceError = "최대 4개 계정까지 연결할 수 있습니다. 설정에서 기존 계정을 정리해 주세요."
+            return nil
+        }
+        var paths = accountPaths
+        if existing == nil { paths[index] = normalized }
+        let id = Self.stableAccountIDs[index]
+        var enabled = enabledAccountIDs
+        if !enabled.contains(id) { enabled.append(id) }
+        return registerAccountPaths(paths, enabledIDs: enabled, now: now) ? id : nil
     }
 
     /// 변경된 경로만 검증하고 모든 슬롯을 하나의 설정 묶음으로 반영
@@ -460,8 +495,16 @@ public final class PreferencesStore: ObservableObject {
             }
         }
         if normalized.contains(where: { !$0.isEmpty }) { return registerAccountPaths(normalized) }
+        let previousRemoved = accountPathsWereRemoved
+        let previousPaths = accountPaths
+        if hasRegisteredAccount { accountPathsWereRemoved = true }
         accountPaths = normalized
-        return persist()
+        guard persist() else {
+            accountPaths = previousPaths
+            accountPathsWereRemoved = previousRemoved
+            return false
+        }
+        return true
     }
 
     /// 목적: 활성 계정 ID를 정규화해 게시·저장
@@ -538,7 +581,8 @@ public final class PreferencesStore: ObservableObject {
     public func persist() -> Bool {
         guard !settingsLoadFailed else { return false }
         let candidate = SettingsBundle(settings: currentPayload,
-            hasRegisteredAccount: hasRegisteredAccount, firstAccountRegisteredAt: firstAccountRegisteredAt)
+            hasRegisteredAccount: hasRegisteredAccount, firstAccountRegisteredAt: firstAccountRegisteredAt,
+            accountPathsWereRemoved: accountPathsWereRemoved ? true : nil)
         do {
             let data = try JSONEncoder().encode(candidate)
             try configurationFile?.saveInstallation(InstallationHistory(
@@ -555,6 +599,7 @@ public final class PreferencesStore: ObservableObject {
                 restore(committedBundle.settings)
                 hasRegisteredAccount = committedBundle.hasRegisteredAccount
                 firstAccountRegisteredAt = committedBundle.firstAccountRegisteredAt
+                accountPathsWereRemoved = committedBundle.accountPathsWereRemoved == true
             }
             persistenceError = "설정을 반영하지 못했습니다: \(error.localizedDescription)"
             return false

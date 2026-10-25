@@ -10,7 +10,7 @@ import XCTest
 final class AccountSetupWindowTests: XCTestCase {
     /// 표시·레이아웃·비동기 본문 변경 이후 최소 콘텐츠 크기 유지 검증
     func testDisplayedWindowPreservesMinimumContentSize() async throws {
-        let model = AccountSetupModel()
+        let model = makeModel()
         let window = AccountSetupWindow.make(model: model, onComplete: { _ in }, onLater: {})
         defer { window.close() }
         window.orderFront(nil)
@@ -27,7 +27,7 @@ final class AccountSetupWindowTests: XCTestCase {
 
     /// 동일 호스트를 닫지 않고 재표시해도 콘텐츠 크기가 축소되지 않는지 검증
     func testReopeningWindowPreservesContentSize() {
-        let window = AccountSetupWindow.make(model: AccountSetupModel(), onComplete: { _ in }, onLater: {})
+        let window = AccountSetupWindow.make(model: makeModel(), onComplete: { _ in }, onLater: {})
         defer { window.close() }
         window.orderFront(nil)
         window.contentView?.layoutSubtreeIfNeeded()
@@ -37,6 +37,16 @@ final class AccountSetupWindowTests: XCTestCase {
         window.contentView?.layoutSubtreeIfNeeded()
         XCTAssertTrue(window.isVisible)
         assertMinimumSize(window)
+    }
+
+    /// 실제 사용자 계정의 자동 탐색·네트워크 접근 없는 창 테스트 모델 제공
+    private func makeModel() -> AccountSetupModel {
+        AccountSetupModel(validator: AccountPathValidator(fileSystem: .init { _ in
+            AccountPathFileMetadata(exists: false, isDirectory: false, isReadable: false)
+        }), checker: { config in
+            XCTFail("창 크기 테스트의 실제 계정 조회 금지")
+            return AccountState(id: config.id, status: .error)
+        })
     }
 
     /// 실제 프레임·호스팅 뷰 크기의 최소 치수 확인

@@ -9,16 +9,16 @@ struct TokenUsageSettingsSection: View {
 
     var body: some View {
         Section("계정 토큰 사용량") {
-            Toggle("주간 사용량 차트 사용", isOn: $options.weeklyChartEnabled)
-            Picker("차트 형태", selection: $options.chartStyle) {
-                ForEach(TokenChartStyle.allCases, id: \.self) { Text($0.title).tag($0) }
-            }.disabled(!options.weeklyChartEnabled)
+            Picker("표시 방식", selection: $options.displayMode) {
+                ForEach(TokenUsageDisplayMode.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .accessibilityIdentifier("token-usage-display-mode")
             Picker("날짜 표시 범위", selection: $options.retentionMonths) {
                 Text("3개월").tag(3)
                 Text("6개월").tag(6)
                 Text("1년").tag(12)
             }
-            Text("차트를 끄면 최근 24주 잔디를 표시합니다. 계정 서버에서 제공한 날짜만 사용하며, 미제공 날짜는 0으로 표시하지 않습니다.")
+            Text("잔디는 최근 24주를 표시합니다. 계정 서버에서 제공한 날짜만 사용하며, 미제공 날짜는 0으로 표시하지 않습니다.")
                 .font(.caption).foregroundStyle(.secondary)
             Text("표시 범위는 서버의 내역 제공 기간을 늘리지 않습니다. 로컬 세션 로그는 토큰 집계에 사용하지 않습니다.")
                 .font(.caption).foregroundStyle(.secondary)

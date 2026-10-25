@@ -7,6 +7,7 @@ import CodexQuotaMonitorKit
 extension CodexQuotaMonitorAppDelegate {
     func openSettings() {
         synchronizeLaunchAtLoginStatus()
+        quotaResetNotifications.refreshAuthorization()
         // Accessory apps can report `showSettingsWindow:` as handled without
         // actually presenting SwiftUI's Settings scene. Ring clicks therefore
         // use the concrete AppKit host directly and reuse it on later clicks.
@@ -37,82 +38,85 @@ extension CodexQuotaMonitorAppDelegate {
 
     /// 목적: 설정 화면과 앱 위임자 저장·렌더 콜백 연결
     func makeSettingsView() -> some View {
-        SettingsView(
-            refreshIntervalMinutes: Binding(
-                get: { [weak self] in self?.preferences.refreshIntervalMinutes ?? 5 },
-                set: { [weak self] value in self?.applyRefreshInterval(value) }
-            ),
-            accountPaths: Binding(
-                get: { [weak self] in self?.preferences.accountPaths ?? [] },
-                set: { [weak self] values in self?.applyAccountPaths(values) }
-            ),
-            launchAtLogin: Binding(
-                get: { [weak self] in self?.launchAtLoginService.currentStatus == .enabled },
-                set: { [weak self] enabled in self?.applyLaunchAtLogin(enabled) }
-            ),
-            launchAtLoginService: launchAtLoginService,
-            showAccountLabels: Binding(
-                get: { [weak self] in self?.preferences.showAccountLabels ?? false },
-                set: { [weak self] enabled in self?.applyShowAccountLabels(enabled) }
-            ),
-            activityNotificationDurationSeconds: Binding(
-                get: { [weak self] in
-                    self?.preferences.activityNotificationDurationSeconds
-                        ?? PreferencesStore.defaultActivityNotificationDurationSeconds
-                },
-                set: { [weak self] seconds in
-                    self?.applyActivityNotificationDuration(seconds)
-                }
-            ),
-            enabledAccountIDs: Binding(
-                get: { [weak self] in
-                    self?.preferences.enabledAccountIDs ?? PreferencesStore.defaultEnabledAccountIDs
-                },
-                set: { [weak self] ids in self?.applyEnabledAccountIDs(ids) }
-            ),
-            accountDisplayOrder: Binding(
-                get: { [weak self] in
-                    self?.preferences.accountDisplayOrder ?? PreferencesStore.defaultAccountDisplayOrder
-                },
-                set: { [weak self] ids in self?.applyAccountDisplayOrder(ids) }
-            ),
-            accountDisplayNames: Binding(
-                get: { [weak self] in self?.preferences.accountDisplayNames ?? [:] },
-                set: { [weak self] names in
-                    guard let self else { return }
-                    self.preferences.updateAccountDisplayNames(names)
-                    self.render(states: self.accountStore.states)
-                }
-            ),
-            resetReminderMinutes: Binding(
-                get: { [weak self] in self?.preferences.resetReminderMinutes ?? 5 },
-                set: { [weak self] minutes in
-                    guard let self else { return }
-                    self.preferences.updateResetReminder(minutes: minutes)
-                    self.quotaResetScheduler.reconcile(
-                        states: self.accountStore.states, reminderMinutes: self.preferences.resetReminderMinutes
-                    )
-                    if minutes > 0 && self.quotaResetNotifications.delivery.status.authorization == .notRequested {
-                        self.quotaResetNotifications.retryAuthorization()
+        SettingsPreferencesHost(preferences: preferences) { store in
+            SettingsView(
+                refreshIntervalMinutes: Binding(
+                    get: { [weak self] in self?.preferences.refreshIntervalMinutes ?? 5 },
+                    set: { [weak self] value in self?.applyRefreshInterval(value) }
+                ),
+                accountPaths: Binding(
+                    get: { [weak self] in self?.preferences.accountPaths ?? [] },
+                    set: { [weak self] values in self?.applyAccountPaths(values) }
+                ),
+                launchAtLogin: Binding(
+                    get: { [weak self] in self?.launchAtLoginService.currentStatus == .enabled },
+                    set: { [weak self] enabled in self?.applyLaunchAtLogin(enabled) }
+                ),
+                launchAtLoginService: self.launchAtLoginService,
+                showAccountLabels: Binding(
+                    get: { [weak self] in self?.preferences.showAccountLabels ?? false },
+                    set: { [weak self] enabled in self?.applyShowAccountLabels(enabled) }
+                ),
+                activityNotificationDurationSeconds: Binding(
+                    get: { [weak self] in
+                        self?.preferences.activityNotificationDurationSeconds
+                            ?? PreferencesStore.defaultActivityNotificationDurationSeconds
+                    },
+                    set: { [weak self] seconds in
+                        self?.applyActivityNotificationDuration(seconds)
                     }
-                }
-            ),
-            notificationDelivery: quotaResetNotifications.delivery,
-            onRetryNotificationAuthorization: { [weak self] in
-                self?.quotaResetNotifications.retryAuthorization()
-            },
-            onSendNotificationTest: { [weak self] in
-                self?.quotaResetNotifications.sendTestNotification()
-            },
-            onOpenNotificationSettings: { [weak self] in
-                self?.openNotificationSettings()
-            },
-            tokenUsageOptions: Binding(
-                get: { [weak self] in self?.preferences.tokenUsageOptions ?? TokenUsageOptions() },
-                set: { [weak self] in self?.applyTokenUsageOptions($0) }
+                ),
+                enabledAccountIDs: Binding(
+                    get: { [weak self] in
+                        self?.preferences.enabledAccountIDs ?? PreferencesStore.defaultEnabledAccountIDs
+                    },
+                    set: { [weak self] ids in self?.applyEnabledAccountIDs(ids) }
+                ),
+                accountDisplayOrder: Binding(
+                    get: { [weak self] in
+                        self?.preferences.accountDisplayOrder ?? PreferencesStore.defaultAccountDisplayOrder
+                    },
+                    set: { [weak self] ids in self?.applyAccountDisplayOrder(ids) }
+                ),
+                accountDisplayNames: Binding(
+                    get: { [weak self] in self?.preferences.accountDisplayNames ?? [:] },
+                    set: { [weak self] names in
+                        guard let self else { return }
+                        self.preferences.updateAccountDisplayNames(names)
+                        self.render(states: self.accountStore.states)
+                    }
+                ),
+                resetReminderMinutes: Binding(
+                    get: { [weak self] in self?.preferences.resetReminderMinutes ?? 5 },
+                    set: { [weak self] minutes in
+                        guard let self else { return }
+                        guard self.preferences.updateResetReminder(minutes: minutes) else { return }
+                        self.quotaResetScheduler.reconcile(
+                            states: self.accountStore.states, reminderMinutes: self.preferences.resetReminderMinutes
+                        )
+                        if self.preferences.resetReminderMinutes > 0 && self.quotaResetNotifications.delivery.status.authorization == .notRequested {
+                            self.quotaResetNotifications.retryAuthorization()
+                        }
+                    }
+                ),
+                notificationDelivery: self.quotaResetNotifications.delivery,
+                onRetryNotificationAuthorization: { [weak self] in
+                    self?.quotaResetNotifications.retryAuthorization()
+                },
+                onSendNotificationTest: { [weak self] in
+                    self?.quotaResetNotifications.sendTestNotification()
+                },
+                onOpenNotificationSettings: { [weak self] in
+                    self?.openNotificationSettings()
+                },
+                tokenUsageOptions: Binding(
+                    get: { [weak self] in self?.preferences.tokenUsageOptions ?? TokenUsageOptions() },
+                    set: { [weak self] in self?.applyTokenUsageOptions($0) }
+                ),
+                onConnectAccount: { [weak self] in self?.openAccountSetup() }
             )
-        )
-        .safeAreaInset(edge: .top) { StorageStatusView(preferences: preferences) }
+            .safeAreaInset(edge: .top) { StorageStatusView(preferences: store) }
+        }
     }
 
     /// 사용자 동작 시 macOS 알림 시스템 설정 열기
@@ -131,6 +135,7 @@ extension CodexQuotaMonitorAppDelegate {
         }
     }
 
+    /// 설정 화면의 경로 저장 후 서비스·표시 갱신 시작
     func applyAccountPaths(_ paths: [String]) {
         let accepted = paths.contains(where: { !$0.isEmpty })
             ? preferences.registerAccountPaths(paths) : preferences.updateAccountPaths(paths)
@@ -141,14 +146,23 @@ extension CodexQuotaMonitorAppDelegate {
             alert.runModal()
             return
         }
-        if preferences.hasRegisteredAccounts {
-            accountSetupWindow?.close()
-        } else if !preferences.hasRegisteredAccount {
-            openAccountSetupIfNeeded()
-        }
+        applySavedAccountPaths()
+    }
+
+    /// 저장된 경로의 서비스 재구성·화면 반영 후 해당 가이드만 닫기
+    func applySavedAccountPaths() {
+        let paths = preferences.accountPaths
+        let setupWindow = accountSetupWindow
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.lifecycleCoordinator.reconfigure(paths: self.preferences.accountPaths)
+            guard let self, self.preferences.accountPaths == paths else { return }
+            await self.lifecycleCoordinator.reconfigure(paths: paths)
+            guard self.preferences.accountPaths == paths else { return }
+            self.render(states: self.accountStore.states)
+            if self.preferences.hasRegisteredAccounts {
+                if self.accountSetupWindow === setupWindow { setupWindow?.close() }
+            } else {
+                self.openAccountSetupIfNeeded()
+            }
         }
     }
 

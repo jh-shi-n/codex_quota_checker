@@ -9,6 +9,20 @@ public enum TokenChartStyle: String, Codable, CaseIterable, Sendable {
     public var title: String { self == .bar ? "막대" : "선" }
 }
 
+/// 기존 차트 사용 여부와 형태를 결합한 화면 선택값
+public enum TokenUsageDisplayMode: String, CaseIterable, Sendable {
+    case heatmap, weeklyBar, weeklyLine
+
+    /// 설정 선택 메뉴의 표시 이름 제공
+    public var title: String {
+        switch self {
+        case .heatmap: "잔디"
+        case .weeklyBar: "주간 막대"
+        case .weeklyLine: "주간 선"
+        }
+    }
+}
+
 /// 표시 여부와 독립적으로 유지되는 일별 집계 보관 정책
 public struct TokenUsageOptions: Codable, Equatable, Sendable {
     public static let retentionChoices = [3, 6, 12]
@@ -22,6 +36,16 @@ public struct TokenUsageOptions: Codable, Equatable, Sendable {
         self.weeklyChartEnabled = weeklyChartEnabled
         self.chartStyle = chartStyle
         self.retentionMonths = Self.retentionChoices.contains(retentionMonths) ? retentionMonths : 12
+    }
+
+    /// 기존 저장 필드와 통합 표시 선택의 양방향 변환 및 잔디 전환 시 이전 차트 형태 보존
+    public var displayMode: TokenUsageDisplayMode {
+        get { weeklyChartEnabled ? (chartStyle == .bar ? .weeklyBar : .weeklyLine) : .heatmap }
+        set {
+            weeklyChartEnabled = newValue != .heatmap
+            if newValue == .weeklyBar { chartStyle = .bar }
+            if newValue == .weeklyLine { chartStyle = .line }
+        }
     }
 
     private enum CodingKeys: String, CodingKey { case weeklyChartEnabled, chartStyle, retentionMonths }
