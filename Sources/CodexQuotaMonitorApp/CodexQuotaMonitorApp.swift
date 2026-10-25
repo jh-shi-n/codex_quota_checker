@@ -102,7 +102,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let notchLayoutManager: NotchLayoutManager
     let lifecycleCoordinator: AppLifecycleCoordinator
 
-    var effectiveLaunchAtLoginStatus: LaunchAtLoginStatus
     let sessionActivityDelivery: SessionActivityToastDeliveryGate
     var fallbackSettingsWindow: NSWindow?
     var accountSetupWindow: NSWindow?
@@ -185,7 +184,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         self.sessionActivityMonitor = sessionActivityMonitor
         self.notchLayoutManager = notchLayoutManager
         self.sessionActivityDelivery = sessionActivityDelivery
-        self.effectiveLaunchAtLoginStatus = launchAtLoginService.status
 
         self.lifecycleCoordinator = AppLifecycleCoordinator(
             actions: AppLifecycleActions(

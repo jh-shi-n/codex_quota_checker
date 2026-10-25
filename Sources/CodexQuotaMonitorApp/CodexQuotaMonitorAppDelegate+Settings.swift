@@ -6,7 +6,7 @@ import CodexQuotaMonitorKit
 
 extension CodexQuotaMonitorAppDelegate {
     func openSettings() {
-        effectiveLaunchAtLoginStatus = lifecycleCoordinator.readLaunchAtLoginStatus()
+        synchronizeLaunchAtLoginStatus()
         // Accessory apps can report `showSettingsWindow:` as handled without
         // actually presenting SwiftUI's Settings scene. Ring clicks therefore
         // use the concrete AppKit host directly and reuse it on later clicks.
@@ -47,9 +47,10 @@ extension CodexQuotaMonitorAppDelegate {
                 set: { [weak self] values in self?.applyAccountPaths(values) }
             ),
             launchAtLogin: Binding(
-                get: { [weak self] in self?.effectiveLaunchAtLoginStatus == .enabled },
+                get: { [weak self] in self?.launchAtLoginService.currentStatus == .enabled },
                 set: { [weak self] enabled in self?.applyLaunchAtLogin(enabled) }
             ),
+            launchAtLoginService: launchAtLoginService,
             showAccountLabels: Binding(
                 get: { [weak self] in self?.preferences.showAccountLabels ?? false },
                 set: { [weak self] enabled in self?.applyShowAccountLabels(enabled) }
@@ -156,18 +157,24 @@ extension CodexQuotaMonitorAppDelegate {
         preferences.updateTokenUsageOptions(options)
     }
 
+    /// 시스템의 실제 활성 여부만 설정에 반영; 등록 변경과 반복 저장 제외
+    func synchronizeLaunchAtLoginStatus() {
+        let status = launchAtLoginService.refreshStatus()
+        let enabled = status == .enabled
+        if preferences.launchAtLogin != enabled { preferences.updateLaunchAtLogin(enabled) }
+    }
+
+    /// 사용자 토글 요청 처리 후 실제 상태 저장과 승인·실패 안내
     private func applyLaunchAtLogin(_ enabled: Bool) {
         switch launchAtLoginService.setEnabled(enabled) {
         case let .success(status):
-            effectiveLaunchAtLoginStatus = status
-            let effective = enabled ? status == .enabled : status == .disabled
-            if effective {
-                preferences.updateLaunchAtLogin(enabled)
-            } else {
+            synchronizeLaunchAtLoginStatus()
+            let effective = enabled ? status == .enabled : status == .disabled || status == .notFound
+            if !effective {
                 presentLaunchAtLoginStatus(status, requestedEnabled: enabled)
             }
         case let .failure(error):
-            effectiveLaunchAtLoginStatus = launchAtLoginService.status
+            synchronizeLaunchAtLoginStatus()
             presentLaunchAtLoginFailureMessage(error.localizedDescription)
         }
     }
