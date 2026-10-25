@@ -10,15 +10,34 @@ import SwiftUI
 import CodexQuotaMonitorKit
 
 @main
+enum CodexQuotaMonitorEntryPoint {
+    /// macOS 14의 Settings Scene 생성 충돌을 기존 AppKit 수명주기로 우회
+    @MainActor
+    static func main() {
+        if #available(macOS 15.0, *) {
+            CodexQuotaMonitorApp.main()
+        } else {
+            let application = NSApplication.shared
+            let delegate = CodexQuotaMonitorAppDelegate()
+            application.delegate = delegate
+            withExtendedLifetime(delegate) {
+                application.run()
+            }
+        }
+    }
+}
+
+/// macOS 15 이상에서 앱 메뉴의 설정 Scene 제공
 struct CodexQuotaMonitorApp: App {
     @NSApplicationDelegateAdaptor(CodexQuotaMonitorAppDelegate.self)
     private var appDelegate: CodexQuotaMonitorAppDelegate
 
     var body: some Scene {
-        // macOS 14 Scene 생성 충돌 방지를 위해 콘텐츠 frame의 기본 창 크기 사용
+        // 앱 메뉴와 노치 설정 동작에서 공통 설정 콘텐츠 사용
         Settings {
             appDelegate.makeSettingsView()
         }
+        .defaultSize(SettingsView.defaultWindowSize)
     }
 }
 
