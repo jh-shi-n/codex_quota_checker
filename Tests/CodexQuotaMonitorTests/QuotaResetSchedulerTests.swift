@@ -10,6 +10,20 @@ import XCTest
 final class QuotaResetSchedulerTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// 시각이 같더라도 새 관측 구간에서는 이전 예약을 재사용하지 않는지 검증
+    func testNewSegmentCancelsOldScheduleEvenWhenTimestampIsUnchanged() async {
+        let h = ResetScheduleHarness()
+        var account = makeAccount(resetAfter: 600)
+        account.primaryResetSegmentID = UUID()
+        h.scheduler.reconcile(states: [account], reminderMinutes: 5, now: now)
+        account.primaryResetSegmentID = UUID()
+        account.primaryResetObservation = .checking
+        h.scheduler.reconcile(states: [account], reminderMinutes: 5, now: now.addingTimeInterval(100))
+        await h.scheduler.tick(now: now.addingTimeInterval(600))
+        XCTAssertTrue(h.alerts.isEmpty)
+        XCTAssertTrue(h.refreshes.isEmpty)
+    }
+
     /// 주간 잔량 0이면 5시간 사전·도달 알림 모두 생략 검증
     func testExhaustedWeeklyQuotaSuppressesFiveHourNotifications() async {
         let h = ResetScheduleHarness()

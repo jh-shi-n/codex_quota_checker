@@ -69,8 +69,7 @@ public struct AccountQuotaSection: View {
                         Text("남은 시간")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        Text(observation == .movingObserved ? "초기화 시각 변동 중" :
-                                AccountDashboardFormatting.remainingTimeText(until: resetAt, now: now))
+                        Text(AccountDashboardFormatting.remainingTimeText(until: resetAt, now: now))
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
                     }
@@ -79,14 +78,16 @@ public struct AccountQuotaSection: View {
                         Text("초기화")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        Text(observation == .movingObserved ? "미확정" :
-                                AccountDashboardFormatting.dateText(resetAt))
+                        Text(AccountDashboardFormatting.dateText(resetAt))
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            Text(observation == .stableObserved ? "고정 관측" : (observation == .movingObserved ? "초기화 시각 변동 중" : "초기화 시각 확인 중"))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .topLeading)

@@ -49,6 +49,16 @@ public final class AutomaticResetPingCoordinator {
         self.enabled = enabled
         accounts = Dictionary(states.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         for (id, operation) in operations {
+            if let current = accounts[id], current.resetChanges.contains(where: { change in
+                change.kind == .reset && operation.windows.contains(change.window)
+                    && (change.window == .primary
+                        ? current.primaryResetSegmentID != operation.account.primaryResetSegmentID
+                        : current.secondaryResetSegmentID != operation.account.secondaryResetSegmentID)
+            }) {
+                operation.task.cancel()
+                operations[id] = nil
+                continue
+            }
             if let current = accounts[id], current.status == .normal, !Self.canSend(current) {
                 record(.automaticResetPingSkipped, id: id, reason: "quota_unavailable_or_low")
                 operation.task.cancel()
@@ -75,7 +85,9 @@ public final class AutomaticResetPingCoordinator {
                   let updated = current.lastUpdated, abs(updated.timeIntervalSince(now())) <= 30,
                   previous.lastUpdated.map({ updated > $0 }) ?? false
             else { continue }
-            let windows = resetWindows(previous: previous, current: current)
+            let changes = current.primaryResetSegmentID != nil || current.secondaryResetSegmentID != nil
+                ? current.resetChanges : QuotaResetChange.detect(previous: previous, current: current, now: now())
+            let windows = changes.filter { $0.kind == .reset }.map(\.window)
             guard !windows.isEmpty else { continue }
             record(.automaticResetPingDetected, id: current.id, reason: "reset_confirmed")
             guard Self.canSend(current) else {
@@ -115,29 +127,6 @@ public final class AutomaticResetPingCoordinator {
     static func canSend(_ state: AccountState) -> Bool {
         state.status == .normal && state.secondaryRemainingPercent.map { $0 > 10 } == true
             && state.primaryRemainingPercent.map { $0 > 0 } == true
-    }
-
-    /// 사용량 감소와 실제 시각 도달을 결합하고 리셋권 사용·단순 이동 관측 제외
-    private func resetWindows(previous: AccountState, current: AccountState) -> [Window] {
-        var windows: [Window] = []
-        for window: Window in [.primary, .secondary] {
-            let oldUsed = window == .primary ? previous.primaryUsedPercent : previous.secondaryUsedPercent
-            let used = window == .primary ? current.primaryUsedPercent : current.secondaryUsedPercent
-            let oldReset = window == .primary ? previous.primaryResetAt : previous.secondaryResetAt
-            let reset = window == .primary ? current.primaryResetAt : current.secondaryResetAt
-            let observation = window == .primary ? previous.primaryResetObservation : previous.secondaryResetObservation
-            guard let oldUsed, let used, let oldReset,
-                  oldReset.timeIntervalSince1970.isFinite else { continue }
-            if oldReset <= now(), observation == .stableObserved,
-               used < oldUsed || (used == 0 && reset.map({ $0 > oldReset.addingTimeInterval(2) }) == true) {
-                windows.append(window)
-            } else if now() < oldReset, used < oldUsed,
-                      used == 0 || reset.map({ $0 > oldReset.addingTimeInterval(2) }) == true,
-                      current.resetCredits?.usageEvidence(comparedTo: previous.resetCredits, now: now()) == .notObserved {
-                windows.append(window)
-            }
-        }
-        return windows
     }
 
     /// 최초 전송 후 5·15·30초 간격 최대 3회 재시도; Ping 성공 후에는 조회만 재시도
@@ -186,8 +175,8 @@ public final class AutomaticResetPingCoordinator {
             }
             if windows.allSatisfy({ window in
                 (window == .primary ? fresh.primaryUsedPercent : fresh.secondaryUsedPercent).map { $0 > 0 } == true
-            }) {
-                record(.automaticResetPingSkipped, id: account.id, reason: "already_in_use")
+            }) || hasResetTimes(fresh, windows: windows) {
+                record(.automaticResetPingSkipped, id: account.id, reason: "already_in_use_or_stable")
                 return
             }
             let presentation = await probe(fresh)
@@ -195,6 +184,18 @@ public final class AutomaticResetPingCoordinator {
             if presentation.result.isCancelled { return }
             if presentation.result.isSuccess {
                 didSend = true
+                if let confirmation = presentation.resetConfirmation {
+                    guard confirmation.isCurrentAccount else { return }
+                    let targetWindows = operations[account.id]?.windows ?? windows
+                    if confirmation.isStable(for: targetWindows) {
+                        record(.automaticResetPingFinished, id: account.id, reason: "confirmed", attempt: attempt + 1)
+                    } else {
+                        record(.automaticResetPingFinished, id: account.id, reason: "confirmation_incomplete", attempt: attempt + 1)
+                        await notify(QuotaResetAlert(accountID: account.id, title: "자동 Ping 시각 확인 미완료",
+                            body: "Ping 전송 완료 · 5시간 \(confirmation.primary.text) · 주간 \(confirmation.secondary.text). 추가 Ping은 보내지 않습니다."))
+                    }
+                    return
+                }
                 if presentation.quotaRefreshSucceeded == true,
                    let after = presentation.refreshedAccount, sameIdentity(account, after),
                    hasResetTimes(after, windows: operations[account.id]?.windows ?? windows) {
@@ -219,11 +220,12 @@ public final class AutomaticResetPingCoordinator {
             body: "\(account.id): \(didSend ? "Ping은 전송했으나 초기화 시각을 확인하지 못했습니다." : "초기화 후 자동 Ping을 완료하지 못했습니다.") 설정과 계정 상태를 확인해 주세요."))
     }
 
-    /// 서버 재조회에서 초기화된 각 구간의 새 미래 시각 확인
+    /// 현재 관측 구간의 미래 시각과 고정 관측을 함께 확인
     private func hasResetTimes(_ account: AccountState, windows: [Window]) -> Bool {
         account.status == .normal && windows.allSatisfy { window in
             let date = window == .primary ? account.primaryResetAt : account.secondaryResetAt
-            return date.map { $0.timeIntervalSince1970.isFinite && $0 > now() } == true
+            let observation = window == .primary ? account.primaryResetObservation : account.secondaryResetObservation
+            return observation == .stableObserved && date.map { $0.timeIntervalSince1970.isFinite && $0 > now() } == true
         }
     }
 
@@ -244,7 +246,7 @@ public final class AutomaticResetPingCoordinator {
         var fields: [DiagnosticField: DiagnosticValue] = [.reason: .identifier(reason)]
         if let attempt { fields[.attempt] = .integer(attempt) }
         DiagnosticLogContext.record(event,
-            level: event == .automaticResetPingFinished && reason != "confirmed" ? .error : .notice,
+            level: event == .automaticResetPingFinished && !["confirmed", "confirmation_incomplete"].contains(reason) ? .error : .notice,
             accountID: id, fields: fields)
     }
 }

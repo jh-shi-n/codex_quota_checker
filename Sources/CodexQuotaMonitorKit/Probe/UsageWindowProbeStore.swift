@@ -9,21 +9,26 @@ import Foundation
 public final class UsageWindowProbeStore: ObservableObject {
     public static let shared = UsageWindowProbeStore()
 
-    /// 경로 변경 전후의 동일 슬롯 작업과 결과 분리
+    /// 경로·로그인·구독 변경 전후의 동일 슬롯 작업과 결과 분리
     private struct Key: Hashable {
         let id: String
         let generation: Int
+        let email: String?
+        let planType: String?
 
         /// 계정 슬롯과 설정 세대로 식별자 생성
         init(_ account: AccountState) {
             id = account.id
             generation = account.configurationGeneration
+            email = account.email
+            planType = account.planType
         }
     }
 
     @Published private var results: [Key: UsageWindowProbePresentationResult] = [:]
     @Published private var lastStartedAtByAccount: [Key: Date] = [:]
     @Published private var tasks: [Key: Operation] = [:]
+    @Published private var confirming: Set<Key> = []
 
     /// 취소 후 재시작된 동일 계정 작업의 완료 처리 격리
     private struct Operation {
@@ -36,6 +41,15 @@ public final class UsageWindowProbeStore: ObservableObject {
     /// 현재 계정 설정에 속한 실행 상태 반환
     func isRunning(for account: AccountState) -> Bool {
         tasks[Key(account)] != nil
+    }
+
+    /// 전송 완료 이후 추가 한도 조회 중인 계정 상태 반환
+    func isConfirming(for account: AccountState) -> Bool { confirming.contains(Key(account)) }
+
+    /// 현재 수동 실행의 전송 완료·시각 확인 단계 반영
+    public func markConfirming(for account: AccountState) {
+        let key = Key(account)
+        if tasks[key] != nil { confirming.insert(key) }
     }
 
     /// 팝오버 재진입에도 유지되는 현재 요청의 시작 시각 조회
@@ -73,6 +87,7 @@ public final class UsageWindowProbeStore: ObservableObject {
         let task = Task { @MainActor in
             defer {
                 if tasks[key]?.id == operationID {
+                    confirming.remove(key)
                     tasks[key] = nil
                 }
             }
@@ -126,5 +141,6 @@ public final class UsageWindowProbeStore: ObservableObject {
             operation.task.cancel()
         }
         tasks.removeAll()
+        confirming.removeAll()
     }
 }

@@ -24,6 +24,7 @@ public final class QuotaResetScheduler {
         let account: AccountState
         let window: Window
         let resetAt: Date
+        let segmentID: UUID?
         var reminderHandled: Bool
         var boundaryHandled = false
     }
@@ -56,7 +57,8 @@ public final class QuotaResetScheduler {
                 let key = "\(account.id).\(window.rawValue)"
                 let reset = window == .primary ? account.primaryResetAt : account.secondaryResetAt
                 let observation = window == .primary ? account.primaryResetObservation : account.secondaryResetObservation
-                if var old = entries[key], sameIdentity(old.account, account) {
+                let segmentID = window == .primary ? account.primaryResetSegmentID : account.secondaryResetSegmentID
+                if var old = entries[key], sameIdentity(old.account, account), old.segmentID == segmentID {
                     // 도달과 동시에 정기 조회가 완료되어도 미처리 도달 이벤트 유지
                     if old.resetAt <= now && !old.boundaryHandled,
                        [.normal, .loading, .timeout, .error].contains(account.status) {
@@ -76,7 +78,7 @@ public final class QuotaResetScheduler {
                 guard account.status == .normal, observation == .stableObserved,
                       let reset, reset.timeIntervalSince1970.isFinite, reset > now else { continue }
                 entries[key] = Entry(
-                    account: account, window: window, resetAt: reset,
+                    account: account, window: window, resetAt: reset, segmentID: segmentID,
                     reminderHandled: nextLead == 0 || now >= reset.addingTimeInterval(-Double(nextLead * 60))
                 )
             }
@@ -129,6 +131,7 @@ public final class QuotaResetScheduler {
         }
         for entry in reminders {
             guard let current = accounts[entry.account.id], sameIdentity(entry.account, current), !Task.isCancelled else { continue }
+            guard entry.segmentID == segmentID(current, window: entry.window) else { continue }
             if entry.window == .primary, current.secondaryRemainingPercent == 0 { continue }
             let currentReset = entry.window == .primary ? current.primaryResetAt : current.secondaryResetAt
             guard let currentReset, abs(currentReset.timeIntervalSince(entry.resetAt)) <= 2 else { continue }
@@ -155,6 +158,10 @@ public final class QuotaResetScheduler {
             let updated = refreshed[id]
             for entry in due where entry.account.id == id {
                 guard let current = accounts[id], sameIdentity(entry.account, current), !Task.isCancelled else { continue }
+                if entry.segmentID != segmentID(current, window: entry.window) {
+                    guard let updated, QuotaResetChange.detect(previous: entry.account, current: updated, now: now)
+                        .contains(where: { $0.window.rawValue == entry.window.rawValue && $0.kind == .reset && $0.cause == .scheduled }) else { continue }
+                }
                 if entry.window == .primary,
                    (updated?.secondaryRemainingPercent ?? current.secondaryRemainingPercent) == 0 { continue }
                 let reset = entry.window == .primary ? updated?.primaryResetAt : updated?.secondaryResetAt
@@ -178,5 +185,10 @@ public final class QuotaResetScheduler {
     private func sameIdentity(_ lhs: AccountState, _ rhs: AccountState) -> Bool {
         lhs.id == rhs.id && lhs.configurationGeneration == rhs.configurationGeneration
             && lhs.email == rhs.email && lhs.planType == rhs.planType
+    }
+
+    /// 알림 대상을 현재 한도별 관측 구간과 대조하는 식별자 조회
+    private func segmentID(_ account: AccountState, window: Window) -> UUID? {
+        window == .primary ? account.primaryResetSegmentID : account.secondaryResetSegmentID
     }
 }

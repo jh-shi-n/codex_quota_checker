@@ -55,6 +55,8 @@ public final class AccountStore: ObservableObject {
     private var appliedRequestIDs: [String: UUID] = [:]
     private var latestRequestIDs: [String: UUID] = [:]
     private var resetHistories: [String: ResetHistory] = [:]
+    /// 실제 실행 중 수집한 정상 응답만 초기화 감지 기준으로 사용
+    private var resetBaselines: [String: AccountState] = [:]
 
     /// 동일 슬롯의 계정·구독 변경 시 관측 이력을 분리하는 식별 정보
     private struct ResetHistory {
@@ -62,6 +64,8 @@ public final class AccountStore: ObservableObject {
         let planType: String?
         var primary = ResetTimeTracker()
         var secondary = ResetTimeTracker()
+        var lastUptime: TimeInterval?
+        var lastObservedAt: Date?
     }
 
     public init(
@@ -223,6 +227,7 @@ public final class AccountStore: ObservableObject {
             }
             latestRequestIDs[config.id] = nil
             resetHistories[config.id] = nil
+            resetBaselines[config.id] = nil
             var initial = Self.initialState(for: config, preferencesStore: preferencesStore)
             initial.configurationGeneration = (oldStates[config.id]?.configurationGeneration ?? 0) + 1
             return initial
@@ -412,6 +417,7 @@ public final class AccountStore: ObservableObject {
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
         var state = result.state
         state.configurationGeneration = states[index].configurationGeneration
+        var changes: [QuotaResetChange] = []
         if state.status == .normal {
             var history = resetHistories[state.id]
             if history?.email != state.email || history?.planType != state.planType {
@@ -423,6 +429,39 @@ public final class AccountStore: ObservableObject {
             let maximumGap = max(900, Double(preferencesStore.refreshIntervalMinutes) * 120 + 30)
             if let updated = state.lastUpdated,
                abs(updated.timeIntervalSince(now)) <= 30 {
+                let clockChanged: Bool
+                if let wall = current.lastObservedAt, let monotonic = current.lastUptime {
+                    clockChanged = uptime < monotonic || abs(now.timeIntervalSince(wall) - (uptime - monotonic)) > ResetTimeTracker.tolerance
+                } else { clockChanged = false }
+                if clockChanged {
+                    current.primary.restart()
+                    current.secondary.restart()
+                }
+                if let previous = resetBaselines[state.id], let previousUpdated = previous.lastUpdated,
+                   previous.configurationGeneration == state.configurationGeneration,
+                   previous.email == state.email, previous.planType == state.planType {
+                    guard updated > previousUpdated || clockChanged else {
+                        var preserved = states[index]
+                        preserved.status = .normal
+                        states[index] = preserved
+                        logQuotaResult(.quotaResultDiscarded, result: result, reason: "stale_snapshot")
+                        return
+                    }
+                    let elapsed = updated.timeIntervalSince(previousUpdated)
+                    let clockConsistent = current.lastUptime.map { abs((uptime - $0) - elapsed) <= ResetTimeTracker.tolerance } ?? true
+                    if elapsed > 0, elapsed <= maximumGap, clockConsistent, !clockChanged {
+                        changes = QuotaResetChange.detect(previous: previous, current: state, now: now)
+                    }
+                }
+                for change in changes {
+                    if change.window == .primary { current.primary.restart() }
+                    else { current.secondary.restart() }
+                    DiagnosticLogContext.record(.quotaResetDetected, accountID: state.id, fields: [
+                        .window: .identifier(change.window.rawValue), .cause: .identifier(change.cause.rawValue),
+                        .reason: .identifier(change.kind.rawValue),
+                        .segmentID: .identifier((change.window == .primary ? current.primary.segmentID : current.secondary.segmentID).uuidString)
+                    ])
+                }
                 state.primaryResetObservation = current.primary.observe(
                     resetAt: state.primaryResetAt, observedAt: updated,
                     uptime: uptime, maximumGap: maximumGap
@@ -431,24 +470,37 @@ public final class AccountStore: ObservableObject {
                     resetAt: state.secondaryResetAt, observedAt: updated,
                     uptime: uptime, maximumGap: maximumGap
                 )
+                state.primaryResetSegmentID = state.primaryResetAt.map { $0.timeIntervalSince1970.isFinite && $0 > now } == true ? current.primary.segmentID : nil
+                state.secondaryResetSegmentID = state.secondaryResetAt.map { $0.timeIntervalSince1970.isFinite && $0 > now } == true ? current.secondary.segmentID : nil
+                state.resetChanges = changes
+                current.lastUptime = uptime
+                current.lastObservedAt = now
+                recordObservation(state, previous: resetBaselines[state.id])
                 resetHistories[state.id] = current
+                resetBaselines[state.id] = state
             } else {
                 resetHistories[state.id] = nil
             }
         } else {
-            resetHistories[state.id] = nil
             if Self.shouldPreservePreviousSnapshot(for: state.status) {
+                if var retained = resetHistories[state.id] {
+                    retained.primary.restart()
+                    retained.secondary.restart()
+                    resetHistories[state.id] = retained
+                }
                 state.primaryResetObservation = states[index].primaryResetObservation
                 state.secondaryResetObservation = states[index].secondaryResetObservation
+                state.primaryResetSegmentID = states[index].primaryResetSegmentID
+                state.secondaryResetSegmentID = states[index].secondaryResetSegmentID
+            } else {
+                resetHistories[state.id] = nil
+                resetBaselines[state.id] = nil
             }
         }
         states[index] = state
         logQuotaResult(.quotaResultApplied, result: result)
         guard result.config.isConfigured, result.state.status == .normal else { return }
-        let earlyReset = EarlyQuotaReset.detect(
-            previous: preferencesStore.quotaSnapshot(for: result.config.home),
-            current: result.state
-        )
+        let earlyWindows = changes.filter { $0.kind == .reset && $0.previousReset > observationNow() }.map(\.window)
         preferencesStore.updateQuotaSnapshot(
             for: result.config.home,
             snapshot: PreferencesStore.QuotaSnapshot(
@@ -462,8 +514,24 @@ public final class AccountStore: ObservableObject {
                 lastUpdated: result.state.lastUpdated
             )
         )
-        if let earlyReset {
-            onEarlyQuotaReset?(earlyReset)
+        if !earlyWindows.isEmpty {
+            onEarlyQuotaReset?(EarlyQuotaReset(accountID: state.id, windows: earlyWindows))
+        }
+    }
+
+    /// 민감 정보 없이 한도별 관측 구간·상태·간격·전후 시각 기록
+    private func recordObservation(_ current: AccountState, previous: AccountState?) {
+        for window: EarlyQuotaReset.Window in [.primary, .secondary] {
+            let primary = window == .primary
+            let segment = primary ? current.primaryResetSegmentID : current.secondaryResetSegmentID
+            var fields = DiagnosticLogContext.resetFields(before: previous, after: current)
+            fields[.window] = .identifier(window.rawValue)
+            fields[.observation] = .identifier((primary ? current.primaryResetObservation : current.secondaryResetObservation).rawValue)
+            if let segment { fields[.segmentID] = .identifier(segment.uuidString) }
+            if let previousUpdated = previous?.lastUpdated, let updated = current.lastUpdated {
+                fields[.durationMS] = .integer(Int(max(0, updated.timeIntervalSince(previousUpdated)) * 1000))
+            }
+            DiagnosticLogContext.record(.resetObservationUpdated, accountID: current.id, fields: fields)
         }
     }
 

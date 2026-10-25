@@ -8,6 +8,46 @@ import XCTest
 /// 주입한 시계·네트워크·대기로 자동 전송 정책 검증
 @MainActor
 final class AutomaticResetPingTests: XCTestCase {
+    /// 이미 고정 관측된 새 구간에서는 추가 Ping 소비 생략 검증
+    func testStableResetAtPreflightSkipsSending() async {
+        let h = AutomaticPingHarness()
+        var stable = h.after
+        stable.primaryResetObservation = .stableObserved
+        h.fresh = stable
+        h.trigger()
+        await h.coordinator.waitForPendingOperations()
+        XCTAssertEqual(h.probes, 0)
+        XCTAssertEqual(h.refreshes, 1)
+        XCTAssertTrue(h.alerts.isEmpty)
+    }
+
+    /// 외부 리셋권 사용도 실제 회복이 확인되면 공통 초기화 판정으로 처리
+    func testExternalCreditResetIsDetectedWithoutSuppressingEvent() async {
+        let h = AutomaticPingHarness()
+        h.before.primaryResetAt = h.clock.addingTimeInterval(1_000)
+        h.before.resetCredits = RateLimitResetCredits(availableCount: 1, credits: [
+            .init(id: "fixture", expiresAt: h.clock.addingTimeInterval(86_400))
+        ])
+        h.after.resetCredits = RateLimitResetCredits(availableCount: 0)
+        h.trigger()
+        await h.coordinator.waitForPendingOperations()
+        XCTAssertEqual(h.probes, 1)
+        XCTAssertTrue(h.alerts.isEmpty)
+    }
+
+    /// 공통 확인 상한 이후에도 전송·이전 재시도 대기를 반복하지 않는지 검증
+    func testCompletedMovingConfirmationNeverResendsPing() async {
+        let h = AutomaticPingHarness()
+        h.confirmationResult = ResetTimeConfirmationResult(primary: .movingObserved, secondary: .stableObserved,
+            account: h.after, lastRefreshSucceeded: true, isCurrentAccount: true, queryCount: 4)
+        h.trigger()
+        await h.coordinator.waitForPendingOperations()
+        XCTAssertEqual(h.probes, 1)
+        XCTAssertEqual(h.refreshes, 1)
+        XCTAssertTrue(h.delays.isEmpty)
+        XCTAssertEqual(h.alerts.first?.title, "자동 Ping 시각 확인 미완료")
+    }
+
     /// 최초 실행·기능 활성화 시 과거 초기화에 전송하지 않는지 검증
     func testFirstSnapshotAndEnablingOnlyEstablishBaseline() async {
         let h = AutomaticPingHarness()
@@ -132,6 +172,7 @@ final class AutomaticResetPingTests: XCTestCase {
     func testMovingAndStaleSnapshotsDoNotSend() async {
         let h = AutomaticPingHarness()
         h.before.primaryResetObservation = .movingObserved
+        h.after.primaryUsedPercent = h.before.primaryUsedPercent
         h.trigger()
         await h.coordinator.waitForPendingOperations()
         XCTAssertEqual(h.probes, 0)
@@ -260,6 +301,7 @@ private final class AutomaticPingHarness {
     var failures = 0
     var failureCategory: UsageWindowProbeFailureCategory = .timeout
     var confirmationFails = false
+    var confirmationResult: ResetTimeConfirmationResult?
     var alerts: [QuotaResetAlert] = []
     var delays: [TimeInterval] = []
     var onSleep: (() -> Void)?
@@ -269,17 +311,26 @@ private final class AutomaticPingHarness {
     lazy var coordinator = AutomaticResetPingCoordinator(
         refresh: { [unowned self] _ in
             refreshes += 1
-            return fresh ?? after
+            var result = fresh ?? after
+            if probes > 0 && probes > failures {
+                result.primaryResetObservation = .stableObserved
+                result.secondaryResetObservation = .stableObserved
+            }
+            return result
         },
         probe: { [unowned self] account in
             probes += 1
             onProbe?()
             let failed = probes <= failures
+            var refreshed = fresh ?? after
+            refreshed.primaryResetObservation = .stableObserved
+            refreshed.secondaryResetObservation = .stableObserved
             return UsageWindowProbePresentationResult(
                 result: UsageWindowProbeResult(accountID: account.id, status: failed ? .failure : .success,
                     startedAt: clock, completedAt: clock, failureCategory: failed ? failureCategory : nil),
                 quotaRefreshSucceeded: !failed && !confirmationFails,
-                refreshedAccount: failed || confirmationFails ? nil : (fresh ?? after)
+                refreshedAccount: failed || confirmationFails ? nil : refreshed,
+                resetConfirmation: confirmationResult
             )
         },
         notify: { [unowned self] alert in alerts.append(alert) },
@@ -299,6 +350,7 @@ private final class AutomaticPingHarness {
         after.primaryUsedPercent = 0
         after.primaryResetAt = clock.addingTimeInterval(18_000)
         after.lastUpdated = clock
+        after.primaryResetObservation = .checking
     }
 
     /// 초기 기준 수집 이후 실제 초기화 상태 적용

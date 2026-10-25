@@ -286,6 +286,28 @@ final class DiagnosticLoggerTests: XCTestCase {
         XCTAssertEqual(row["level"] as? String, DiagnosticLevel.notice.rawValue)
     }
 
+    /// 같은 프로세스의 유지보수 경합이 파일 잠금 대기 한도를 넘어도 기록 보존 검증
+    func testSameProcessContentionDoesNotDropQueuedRecord() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let first = DiagnosticLogger(directory: directory, now: {
+            entered.signal()
+            _ = release.wait(timeout: .now() + 3)
+            return Date()
+        }, osLogEnabled: false, timerEnabled: false)
+        XCTAssertEqual(entered.wait(timeout: .now() + 3), .success)
+        let second = DiagnosticLogger(directory: directory, osLogEnabled: false, timerEnabled: false)
+        second.record(.probeFinished, fields: [.reason: .identifier("after-contention")])
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(700)) { release.signal() }
+        XCTAssertTrue(second.flush(timeout: 5))
+        XCTAssertTrue(first.flush(timeout: 5))
+        let reasons = try jsonLines(in: directory).compactMap { ($0["fields"] as? [String: Any])?["reason"] as? [String: Any] }
+            .compactMap { $0["value"] as? String }
+        XCTAssertEqual(reasons, ["after-contention"])
+    }
+
     /// - 목적: 같은 디렉터리를 쓰는 두 인스턴스의 기록 충돌 방지 확인
     func testMultipleInstancesSerializeWritesThroughProcessLock() throws {
         let directory = try temporaryDirectory()

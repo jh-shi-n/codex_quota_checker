@@ -7,6 +7,24 @@ import XCTest
 /// 화면 수명과 독립적인 계정별 갱신 동작 검증
 @MainActor
 final class UsageWindowProbeStoreTests: XCTestCase {
+    /// 동일 경로의 로그인·구독 변경에서 이전 실행 결과·시각 재사용 차단 검증
+    func testLoginAndSubscriptionChangesDoNotInheritOldProbeResult() async {
+        let store = UsageWindowProbeStore()
+        let original = AccountState(id: "C1", email: "first@example.invalid", planType: "plus", status: .normal)
+        await store.start(for: original) { account in
+            AccountDashboardDefaults.unavailableProbe(accountID: account.id)
+        }!.value
+        XCTAssertNotNil(store.presentation(for: original))
+        for emailChanged in [false, true] {
+            var changed = original
+            if emailChanged { changed.email = "second@example.invalid" }
+            else { changed.planType = "pro" }
+            XCTAssertNil(store.presentation(for: changed))
+            XCTAssertNil(store.lastStartedAt(for: changed))
+            XCTAssertFalse(store.isConfirming(for: changed))
+        }
+    }
+
     /// 팝오버 재진입과 중복 실행 시에도 현재 계정의 원래 요청 시작 시각 유지
     func testRequestStartTimeSurvivesOverlapAndLastExecutionRemainsInMemory() async throws {
         let store = UsageWindowProbeStore()
@@ -90,6 +108,7 @@ final class UsageWindowProbeStoreTests: XCTestCase {
         let quota = ProbeStoreTestGate()
         let task = store.start(for: account) { account in
             await ping.wait()
+            store.markConfirming(for: account)
             await quota.wait()
             XCTAssertFalse(Task.isCancelled)
             return UsageWindowProbePresentationResult(
@@ -99,15 +118,18 @@ final class UsageWindowProbeStoreTests: XCTestCase {
             )
         }!
         await ping.waitUntilStarted()
+        XCTAssertFalse(store.isConfirming(for: account))
         let caller = Task { await task.value }
         caller.cancel()
         await ping.release()
         await quota.waitUntilStarted()
         XCTAssertTrue(store.isRunning(for: account))
+        XCTAssertTrue(store.isConfirming(for: account))
         XCTAssertNil(store.presentation(for: account))
         await quota.release()
         await caller.value
         XCTAssertFalse(store.isRunning(for: account))
+        XCTAssertFalse(store.isConfirming(for: account))
         XCTAssertEqual(store.presentation(for: account)?.quotaRefreshSucceeded, true)
     }
 

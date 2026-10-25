@@ -22,6 +22,7 @@ public struct UsageWindowProbePresentationResult: Equatable, Sendable {
     public let refreshedAccount: AccountState?
     /// 계정 경로와 세대가 현재 상세와 일치하는지 여부
     public let isCurrentAccount: Bool
+    public let resetConfirmation: ResetTimeConfirmationResult?
 
     /// 하위 호환 가능한 Ping 및 한도 갱신 결과 생성
     public init(
@@ -32,7 +33,8 @@ public struct UsageWindowProbePresentationResult: Equatable, Sendable {
         secondaryResetAfter: Date? = nil,
         quotaRefreshSucceeded: Bool? = nil,
         refreshedAccount: AccountState? = nil,
-        isCurrentAccount: Bool = true
+        isCurrentAccount: Bool = true,
+        resetConfirmation: ResetTimeConfirmationResult? = nil
     ) {
         self.result = result
         self.primaryResetBefore = primaryResetBefore
@@ -42,6 +44,7 @@ public struct UsageWindowProbePresentationResult: Equatable, Sendable {
         self.quotaRefreshSucceeded = quotaRefreshSucceeded
         self.refreshedAccount = refreshedAccount
         self.isCurrentAccount = isCurrentAccount
+        self.resetConfirmation = resetConfirmation
     }
 
     public var isSuccess: Bool { result.isSuccess }
@@ -68,6 +71,11 @@ enum AccountDashboardPresentation {
               probe.quotaRefreshSucceeded == true,
               let refreshedAccount = probe.refreshedAccount,
               refreshedAccount.id == current.id,
+              refreshedAccount.configurationGeneration == current.configurationGeneration,
+              refreshedAccount.email == current.email,
+              refreshedAccount.planType == current.planType,
+              current.primaryResetSegmentID.map({ $0 == refreshedAccount.primaryResetSegmentID }) ?? true,
+              current.secondaryResetSegmentID.map({ $0 == refreshedAccount.secondaryResetSegmentID }) ?? true,
               let currentUpdatedAt = current.lastUpdated,
               let refreshedUpdatedAt = refreshedAccount.lastUpdated,
               refreshedUpdatedAt > currentUpdatedAt

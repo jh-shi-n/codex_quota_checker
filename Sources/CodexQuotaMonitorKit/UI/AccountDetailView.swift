@@ -102,7 +102,8 @@ public struct AccountDetailView: View {
             account: displayedAccount, probe: currentProbePresentation,
             isRunning: isProbeRunning, runningStartedAt: probeStore.startedAt(for: account),
             lastExecutionAt: probeStore.lastStartedAt(for: account),
-            isConfigured: displayedAccount.status != .notConfigured, onRun: runProbe
+            isConfigured: displayedAccount.status != .notConfigured, onRun: runProbe,
+            isConfirming: probeStore.isConfirming(for: account)
         )
         if let tokenUsagePreferences {
             UsageWindowProbePreferencesView(preferences: tokenUsagePreferences, section: section)
