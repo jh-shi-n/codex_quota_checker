@@ -72,27 +72,40 @@ private final class UNQuotaResetNotificationBackend: QuotaResetNotificationBacke
         self.center = center
     }
 
-    /// 최신 시스템 권한 상태 조회
+    /// SDK의 Sendable 지원과 무관하게 권한 값만 액터 경계로 전달
     func authorizationStatus() async throws -> QuotaResetNotificationAuthorization {
-        switch await center.notificationSettings().authorizationStatus {
-        case .notDetermined:
-            .notRequested
-        case .denied:
-            .denied
-        case .authorized:
-            .authorized
-        case .provisional:
-            .provisional
-        case .ephemeral:
-            .ephemeral
-        @unknown default:
-            .unknown
+        await withCheckedContinuation { continuation in
+            center.getNotificationSettings { @Sendable settings in
+                let authorization: QuotaResetNotificationAuthorization = switch settings.authorizationStatus {
+                case .notDetermined:
+                    .notRequested
+                case .denied:
+                    .denied
+                case .authorized:
+                    .authorized
+                case .provisional:
+                    .provisional
+                case .ephemeral:
+                    .ephemeral
+                @unknown default:
+                    .unknown
+                }
+                continuation.resume(returning: authorization)
+            }
         }
     }
 
     /// 시스템 알림 권한 요청
     func requestAuthorization() async throws {
-        _ = try await center.requestAuthorization(options: [.alert])
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            center.requestAuthorization(options: [.alert]) { @Sendable _, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
     }
 
     /// 조용한 즉시 표시 알림 전달
@@ -105,6 +118,14 @@ private final class UNQuotaResetNotificationBackend: QuotaResetNotificationBacke
             content: content,
             trigger: nil
         )
-        try await center.add(request)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            center.add(request) { @Sendable error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
     }
 }

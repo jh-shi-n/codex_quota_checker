@@ -10,13 +10,30 @@ import SwiftUI
 import CodexQuotaMonitorKit
 
 @main
+enum CodexQuotaMonitorEntryPoint {
+    /// macOS 14의 Settings Scene 생성 충돌을 기존 AppKit 수명주기로 우회
+    @MainActor
+    static func main() {
+        if #available(macOS 15.0, *) {
+            CodexQuotaMonitorApp.main()
+        } else {
+            let application = NSApplication.shared
+            let delegate = CodexQuotaMonitorAppDelegate()
+            application.delegate = delegate
+            withExtendedLifetime(delegate) {
+                application.run()
+            }
+        }
+    }
+}
+
+/// macOS 15 이상에서 앱 메뉴의 설정 Scene 제공
 struct CodexQuotaMonitorApp: App {
     @NSApplicationDelegateAdaptor(CodexQuotaMonitorAppDelegate.self)
     private var appDelegate: CodexQuotaMonitorAppDelegate
 
     var body: some Scene {
-        // SwiftUI owns one settings scene window. Both the app-menu Settings
-        // command and notch-ring callbacks route to this same populated view.
+        // 앱 메뉴와 노치 설정 동작에서 공통 설정 콘텐츠 사용
         Settings {
             appDelegate.makeSettingsView()
         }
@@ -261,7 +278,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return .failure(.cancelled) }
                 return await self.consumeResetCredit(account, creditID: creditID, attempt: attempt)
             },
-            runUsageWindowProbe: runUsageWindowProbe,
+            runUsageWindowProbe: runUsageWindowProbe
         )
 
         notchLayoutManager.leftPanel.onRefresh = { [weak self] account in

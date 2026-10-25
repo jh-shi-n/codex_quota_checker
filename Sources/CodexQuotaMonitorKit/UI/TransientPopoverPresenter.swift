@@ -71,8 +71,9 @@ struct TransientPopoverPresenter<Content: View>: NSViewRepresentable {
         )
     }
 
+    /// SwiftUI 그래프 해제 중 바인딩 재접근 없이 팝오버 정리
     static func dismantleNSView(_ nsView: AnchorView, coordinator: Coordinator) {
-        coordinator.dismiss()
+        coordinator.dismantle()
     }
 
     final class AnchorView: NSView {
@@ -154,6 +155,17 @@ struct TransientPopoverPresenter<Content: View>: NSViewRepresentable {
                 self.popover = nil
                 isPresented.wrappedValue = false
             }
+        }
+
+        /// 파괴 중인 SwiftUI 바인딩과 콜백을 분리한 뒤 팝오버 해제
+        func dismantle() {
+            isPresented = .constant(false)
+            popover?.delegate = nil
+            dismiss()
+            popover = nil
+            hostingController?.onLayout = nil
+            hostingController = nil
+            anchorView = nil
         }
 
         func dismiss() {
