@@ -146,7 +146,7 @@ public actor SessionActivityMonitor {
         for (id, snapshot) in currentSnapshots {
             guard let oldConfig = oldByID[id],
                   let newConfig = newByID[id],
-                  oldConfig.home == newConfig.home else {
+                  oldConfig.home == newConfig.home, oldConfig.provider == newConfig.provider else {
                 continue
             }
             preservedSnapshots[id] = snapshot
@@ -155,7 +155,7 @@ public actor SessionActivityMonitor {
         for (id, snapshot) in comparisonSnapshots {
             guard let oldConfig = oldByID[id],
                   let newConfig = newByID[id],
-                  oldConfig.home == newConfig.home else {
+                  oldConfig.home == newConfig.home, oldConfig.provider == newConfig.provider else {
                 continue
             }
             preservedComparisons[id] = snapshot
@@ -250,10 +250,7 @@ public actor SessionActivityMonitor {
             for account in accounts {
                 guard account.isConfigured else { continue }
                 group.addTask {
-                    let snapshot = await provider.snapshot(
-                        accountID: account.id,
-                        home: account.home
-                    )
+                    let snapshot = await provider.snapshot(for: account)
                     return PollResult(account: account, snapshot: snapshot)
                 }
             }
@@ -484,7 +481,7 @@ public actor SessionActivityMonitor {
 
     private static func normalizedAccounts(_ input: [AccountConfig]) -> [AccountConfig] {
         let stableIDs = ["C1", "C2", "C3", "C4"]
-        let byID = Dictionary(input.filter { $0.provider == .codex }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let byID = Dictionary(input.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let stable = stableIDs.compactMap { byID[$0] }
         let knownIDs = Set(stableIDs)
         let extras = byID.values

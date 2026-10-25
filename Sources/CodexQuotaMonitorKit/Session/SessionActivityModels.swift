@@ -474,4 +474,12 @@ public struct SessionActivitySnapshot: Equatable, Sendable {
 
 public protocol SessionActivityProvider: Sendable {
     func snapshot(accountID: String, home: URL) async -> SessionActivitySnapshot
+    func snapshot(for config: AccountConfig) async -> SessionActivitySnapshot
+}
+
+public extension SessionActivityProvider {
+    func snapshot(for config: AccountConfig) async -> SessionActivitySnapshot {
+        guard config.isConfigured else { return .unavailable(accountID: config.id) }
+        return await snapshot(accountID: config.id, home: config.home)
+    }
 }

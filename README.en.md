@@ -86,7 +86,10 @@ open "$PWD/codex/CodexQuotaChecker.app"
 - Uses the existing Claude Code Keychain login without copying credentials into settings, caches, or logs. Sign in again in Claude Code when credentials expire. Custom folders use their own `.credentials.json`.
 - Queries are limited to once per minute, with a five-minute pause after errors.
 - Integration depends on an undocumented usage endpoint and may need updates when the service changes.
-- Claude supports quota monitoring only. Token charts, session activity, reset credits, and model pings remain Codex features. Codex pings can consume model tokens.
+- Reads Claude live session descriptors (`sessions/*.json`) every two seconds to show main-conversation work, response completion, waiting, and session exit, including activity toasts.
+- Never reads conversation bodies, transcript JSONL, or session keys. Existing completion states are not replayed at startup.
+- Responses that start and finish between polls may show completion only. Requires a Claude Code version that writes live session metadata.
+- Claude subagent activity is not supported. Token charts, reset credits, and model pings remain Codex features. Codex pings can consume model tokens.
 
 ## Settings
 

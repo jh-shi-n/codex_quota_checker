@@ -83,7 +83,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     )
     let refreshService: RefreshService
     let launchAtLoginService: LaunchAtLoginService
-    let sessionActivityProvider: SQLiteSessionActivityProvider
+    let sessionActivityProvider: AccountSessionActivityProvider
     /// The probe service owns process lifetime and the per-account running gate.
     let usageWindowProbeService: UsageWindowProbeService
     let sessionActivityToastQueue: SessionActivityToastQueue
@@ -119,7 +119,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             }
         )
         let launchAtLoginService = LaunchAtLoginService()
-        let sessionActivityProvider = SQLiteSessionActivityProvider()
+        let sessionActivityProvider = AccountSessionActivityProvider()
         let usageWindowProbeService = UsageWindowProbeService()
         let sessionActivityToastQueue = SessionActivityToastQueue(
             durationSeconds: preferences.activityNotificationDurationSeconds
@@ -381,10 +381,12 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadSessionActivity(_ account: AccountState) async -> SessionActivitySnapshot {
-        guard account.provider == .codex, let home = accountStore.configs.first(where: { $0.id == account.id })?.configuredHome else {
+        guard let config = accountStore.configs.first(where: { $0.id == account.id }), config.isConfigured,
+              config.provider == account.provider,
+              accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration else {
             return .unavailable(accountID: account.id)
         }
-        return await sessionActivityProvider.snapshot(accountID: account.id, home: home)
+        return await sessionActivityProvider.snapshot(for: config)
     }
 
     /// 확인한 계정 설정으로 리셋권 사용 후 서버 한도·잔여 개수 재조회

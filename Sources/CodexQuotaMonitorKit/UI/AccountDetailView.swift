@@ -67,9 +67,15 @@ public struct AccountDetailView: View {
                     } else {
                         AccountTokenUsageView(account: account, store: .shared)
                     }
+                } else {
+                    Text("Claude의 할당량과 로컬 대화 활동을 표시합니다. 조회는 모델 요청을 보내지 않습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-                    accountActivity
+                accountActivity
 
+                if account.provider == .codex {
                     UsageWindowProbeSection(
                         account: displayedAccount,
                         probe: currentProbePresentation,
@@ -79,10 +85,6 @@ public struct AccountDetailView: View {
                         isConfigured: displayedAccount.status != .notConfigured,
                         onRun: runProbe
                     )
-                } else {
-                    Text("Claude는 5시간·주간 할당량을 표시합니다. 조회는 모델 요청을 보내지 않습니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 if let errorMessage = account.errorMessage, !errorMessage.isEmpty {
@@ -209,7 +211,9 @@ public struct AccountDetailView: View {
                     .font(.headline.weight(.semibold))
             }
 
-            Text("해당 계정의 CLI 세션 기록을 표시합니다. Codex Desktop 앱의 실행 내역은 표시되지 않을 수 있습니다.")
+            Text(account.provider == .claude
+                 ? "Claude Code·Claude Desktop의 로컬 대화 상태를 표시합니다."
+                 : "해당 계정의 CLI 세션 기록을 표시합니다. Codex Desktop 앱의 실행 내역은 표시되지 않을 수 있습니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
