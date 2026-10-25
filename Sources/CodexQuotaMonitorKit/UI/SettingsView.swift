@@ -647,7 +647,7 @@ public struct SettingsView: View {
     }
 
     /// 목적: 네 경로 편집을 위한 입력 배열 길이 보정
-    private static func paddedAccountPaths(_ paths: [String]) -> [String] {
+    nonisolated private static func paddedAccountPaths(_ paths: [String]) -> [String] {
         let prefix = Array(paths.prefix(accountPathCount))
         return prefix + Array(repeating: "", count: max(0, accountPathCount - prefix.count))
     }
