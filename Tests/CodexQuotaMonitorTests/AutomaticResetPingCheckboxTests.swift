@@ -10,6 +10,7 @@ import XCTest
 @MainActor
 final class AutomaticResetPingCheckboxTests: XCTestCase {
     private static var didFinishLaunching = false
+    private static var accessibilityAvailable: Bool?
     /// 클릭 결과의 다른 상세 화면 전파·설정 복원·재진입 검증
     func testClicksUpdateBothViewsAndPersistAcrossReopening() async throws {
         try await withFixture { defaults, file, preferences in
@@ -61,6 +62,14 @@ final class AutomaticResetPingCheckboxTests: XCTestCase {
 
     /// 네트워크·실제 사용자 설정을 사용하지 않는 실제 상세 섹션 호스트 생성
     private func makeWindow(_ preferences: PreferencesStore) -> NSWindow {
+        makeWindow(content: UsageWindowProbePreferencesView(
+            preferences: preferences,
+            section: UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal))
+        ).padding(16))
+    }
+
+    /// 제품 화면과 독립적인 SwiftUI 콘텐츠의 AppKit 수명·호스트 제공
+    private func makeWindow<Content: View>(content: Content) -> NSWindow {
         _ = NSApplication.shared
         if !Self.didFinishLaunching {
             NSApp.setActivationPolicy(.accessory)
@@ -70,13 +79,29 @@ final class AutomaticResetPingCheckboxTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 500, height: 270),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: UsageWindowProbePreferencesView(
-            preferences: preferences,
-            section: UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal))
-        ).padding(16))
+        window.contentView = NSHostingView(rootView: content)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         return window
+    }
+
+    /// 기본 SwiftUI Toggle조차 접근성 노드를 제공하지 않는 headless 환경만 구분
+    private func requireSwiftUIAccessibility() async throws {
+        if Self.accessibilityAvailable == nil {
+            let window = makeWindow(content: Toggle("접근성 환경 확인", isOn: .constant(false)).toggleStyle(.checkbox).padding())
+            defer { window.close() }
+            let view = try XCTUnwrap(window.contentView)
+            Self.accessibilityAvailable = false
+            for _ in 0..<50 {
+                view.layoutSubtreeIfNeeded()
+                if !checkboxNodes(view).isEmpty {
+                    Self.accessibilityAvailable = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        try XCTSkipUnless(Self.accessibilityAvailable == true, "기본 SwiftUI Toggle의 접근성 트리 미제공 환경; 실제 클릭 검사는 GUI 환경에서 실행")
     }
 
     /// SwiftUI 접근성 트리에서 생성된 체크박스 노드 검색
@@ -134,6 +159,7 @@ final class AutomaticResetPingCheckboxTests: XCTestCase {
         let delegate = CheckboxTestApplicationDelegate()
         NSApp.delegate = delegate
         defer { NSApp.delegate = originalDelegate }
+        try await requireSwiftUIAccessibility()
         let suite = "AutomaticResetPingCheckboxTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }

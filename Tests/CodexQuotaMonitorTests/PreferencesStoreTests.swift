@@ -24,15 +24,21 @@ final class PreferencesStoreTests: XCTestCase {
         try withFixture { defaults, root, database in
             let file = AppConfigurationFile(fileURL: root.appendingPathComponent("config.json"))
             let store = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: database)
+            var changes: [Bool] = []
+            store.onAutomaticResetPingChanged = { changes.append($0) }
             let original = try Data(contentsOf: file.fileURL)
             try Data("invalid marker".utf8).write(to: file.fileURL)
             store.updateAutomaticResetPing(true)
             XCTAssertFalse(store.automaticResetPingEnabled)
             XCTAssertNotNil(store.persistenceError)
+            XCTAssertTrue(changes.isEmpty)
             try original.write(to: file.fileURL)
             store.updateAutomaticResetPing(true)
             XCTAssertTrue(store.automaticResetPingEnabled)
             XCTAssertNil(store.persistenceError)
+            XCTAssertEqual(changes, [true])
+            store.updateAutomaticResetPing(true)
+            XCTAssertEqual(changes, [true])
             let restored = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: database)
             XCTAssertTrue(restored.automaticResetPingEnabled)
         }
