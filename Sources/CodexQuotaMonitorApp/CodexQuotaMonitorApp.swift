@@ -15,12 +15,10 @@ struct CodexQuotaMonitorApp: App {
     private var appDelegate: CodexQuotaMonitorAppDelegate
 
     var body: some Scene {
-        // SwiftUI owns one settings scene window. Both the app-menu Settings
-        // command and notch-ring callbacks route to this same populated view.
+        // macOS 14 Scene 생성 충돌 방지를 위해 콘텐츠 frame의 기본 창 크기 사용
         Settings {
             appDelegate.makeSettingsView()
         }
-        .defaultSize(SettingsView.defaultWindowSize)
     }
 }
 
