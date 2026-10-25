@@ -910,6 +910,8 @@ public enum DiagnosticEvent: String, CaseIterable, Sendable {
     case appStarted
     case appTerminating
     case appWoke
+    case launchAtLoginStatusRead
+    case launchAtLoginChanged
     case cliDetected
     case probeRequested
     case probeRejected
@@ -952,6 +954,8 @@ public enum DiagnosticField: String, CaseIterable, Sendable {
     case durationMS
     case exitCode
     case failure
+    case errorDomain
+    case errorCode
     case status
     case model
     case version

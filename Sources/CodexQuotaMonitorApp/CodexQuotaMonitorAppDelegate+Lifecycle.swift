@@ -27,9 +27,13 @@ extension CodexQuotaMonitorAppDelegate {
                 catch { return }
             }
         }
-        if let status = lifecycleCoordinator.launchAtLoginStatus {
-            effectiveLaunchAtLoginStatus = status
-        }
+        synchronizeLaunchAtLoginStatus()
+    }
+
+    /// 시스템 설정에서 앱으로 복귀할 때 자동실행 승인 상태 재확인
+    func applicationDidBecomeActive(_ notification: Notification) {
+        _ = notification
+        synchronizeLaunchAtLoginStatus()
     }
 
     /// 진행 서비스 종료와 마지막 진단 이벤트의 최대 1초 디스크 기록 대기

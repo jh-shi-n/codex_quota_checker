@@ -106,6 +106,7 @@ public struct SettingsView: View {
     @Binding public var accountPaths: [String]
     @Binding public var accountDisplayNames: [String: String]
     @Binding public var launchAtLogin: Bool
+    private let launchAtLoginService: LaunchAtLoginService?
     @Binding public var showAccountLabels: Bool
     @Binding public var activityNotificationDurationSeconds: Int
     /// 화면에 표시할 활성 계정 ID 목록
@@ -132,6 +133,7 @@ public struct SettingsView: View {
         refreshIntervalMinutes: Binding<Int>,
         accountPaths: Binding<[String]>,
         launchAtLogin: Binding<Bool>,
+        launchAtLoginService: LaunchAtLoginService? = nil,
         showAccountLabels: Binding<Bool> = .constant(false),
         activityNotificationDurationSeconds: Binding<Int> = .constant(
             PreferencesStore.defaultActivityNotificationDurationSeconds
@@ -152,6 +154,7 @@ public struct SettingsView: View {
         self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = accountPaths
         self._launchAtLogin = launchAtLogin
+        self.launchAtLoginService = launchAtLoginService
         self._showAccountLabels = showAccountLabels
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
@@ -183,6 +186,7 @@ public struct SettingsView: View {
         account3Path: Binding<String>,
         account4Path: Binding<String>,
         launchAtLogin: Binding<Bool>,
+        launchAtLoginService: LaunchAtLoginService? = nil,
         showAccountLabels: Binding<Bool> = .constant(false),
         activityNotificationDurationSeconds: Binding<Int> = .constant(
             PreferencesStore.defaultActivityNotificationDurationSeconds
@@ -214,6 +218,7 @@ public struct SettingsView: View {
             }
         )
         self._launchAtLogin = launchAtLogin
+        self.launchAtLoginService = launchAtLoginService
         self._showAccountLabels = showAccountLabels
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
@@ -392,7 +397,13 @@ public struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
+                    if let launchAtLoginService {
+                        LaunchAtLoginSettingsView(service: launchAtLoginService) { enabled in
+                            launchAtLogin = enabled
+                        }
+                    } else {
+                        Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
+                    }
                     Toggle("계정 이름 표시", isOn: $showAccountLabels)
                     Text("로그인 시 앱을 자동으로 실행합니다. macOS 시스템 설정 > 로그인 항목에서 승인이 필요할 수 있습니다.")
                         .font(.caption)
