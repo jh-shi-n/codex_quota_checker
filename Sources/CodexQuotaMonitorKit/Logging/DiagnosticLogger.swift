@@ -908,6 +908,10 @@ public enum DiagnosticEvent: String, CaseIterable, Sendable {
     case resetCreditRequested
     case resetCreditRejected
     case resetCreditFinished
+    case automaticResetPingDetected
+    case automaticResetPingSkipped
+    case automaticResetPingAttempt
+    case automaticResetPingFinished
 }
 
 /// - 목적: OSLog·파일 진단 수준
@@ -938,6 +942,7 @@ public enum DiagnosticField: String, CaseIterable, Sendable {
     case outputTokens
     case requestID
     case reason
+    case attempt
 }
 
 /// - 목적: 진단 JSONL에 저장할 값 형식

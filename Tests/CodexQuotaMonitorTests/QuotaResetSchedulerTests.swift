@@ -10,6 +10,19 @@ import XCTest
 final class QuotaResetSchedulerTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// 주간 잔량 0이면 5시간 사전·도달 알림 모두 생략 검증
+    func testExhaustedWeeklyQuotaSuppressesFiveHourNotifications() async {
+        let h = ResetScheduleHarness()
+        var account = makeAccount(resetAfter: 600)
+        account.secondaryRemainingPercent = 0
+        h.result = account
+        h.scheduler.reconcile(states: [account], reminderMinutes: 5, now: now)
+        await h.scheduler.tick(now: now.addingTimeInterval(300))
+        await h.scheduler.tick(now: now.addingTimeInterval(600))
+        XCTAssertEqual(h.refreshes, ["C1"])
+        XCTAssertTrue(h.alerts.isEmpty)
+    }
+
     /// 두 구간 동시 도달 시 계정 1회 조회 및 각 알림 1회 전달 검증
     func testReminderAndBoundaryRefreshAreIndependentAndDeduplicated() async {
         let h = ResetScheduleHarness()

@@ -103,6 +103,7 @@ public struct SettingsView: View {
     @Binding public var tokenUsageOptions: TokenUsageOptions
     @Binding public var refreshIntervalMinutes: Int
     @Binding public var resetReminderMinutes: Int
+    @Binding public var automaticResetPingEnabled: Bool
     @Binding public var accountPaths: [String]
     @Binding public var accountDisplayNames: [String: String]
     @Binding public var launchAtLogin: Bool
@@ -141,6 +142,7 @@ public struct SettingsView: View {
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
         accountDisplayNames: Binding<[String: String]> = .constant([:]),
         resetReminderMinutes: Binding<Int> = .constant(5),
+        automaticResetPingEnabled: Binding<Bool> = .constant(false),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
@@ -150,6 +152,7 @@ public struct SettingsView: View {
         self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._resetReminderMinutes = resetReminderMinutes
+        self._automaticResetPingEnabled = automaticResetPingEnabled
         self._accountPaths = accountPaths
         self._launchAtLogin = launchAtLogin
         self._showAccountLabels = showAccountLabels
@@ -192,6 +195,7 @@ public struct SettingsView: View {
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
         accountDisplayNames: Binding<[String: String]> = .constant([:]),
         resetReminderMinutes: Binding<Int> = .constant(5),
+        automaticResetPingEnabled: Binding<Bool> = .constant(false),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
@@ -201,6 +205,7 @@ public struct SettingsView: View {
         self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._resetReminderMinutes = resetReminderMinutes
+        self._automaticResetPingEnabled = automaticResetPingEnabled
         self._accountPaths = Binding(
             get: {
                 [account1Path.wrappedValue, account2Path.wrappedValue, account3Path.wrappedValue, account4Path.wrappedValue]
@@ -351,6 +356,11 @@ public struct SettingsView: View {
                 }
 
                 Section(Self.quotaResetNotificationSectionTitle) {
+                    Toggle("할당량 초기화 시 자동 전송", isOn: $automaticResetPingEnabled)
+                        .toggleStyle(.checkbox)
+                    Text("초기화 확인 후 최소 Ping으로 새 사용 구간을 시작하며 실제 할당량을 사용합니다. 주간 잔량 10% 이하·잔량 미확인·5시간 잔량 소진 시 전송하지 않습니다. 실패 시 최대 3회 재시도 후 알립니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Picker("초기화 사전 알림", selection: $resetReminderMinutes) {
                         Text("끔").tag(0)
                         Text("10분 전").tag(10)

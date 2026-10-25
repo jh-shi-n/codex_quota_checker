@@ -66,12 +66,14 @@ public struct QuotaResetNotificationFallback: Equatable, Sendable {
     public let id: String
     public let accountID: String
     public let windowTitles: [String]
+    public let isFailure: Bool
 
     /// 계정·리셋 구간별 대체 표시 정보 생성
-    public init(id: String, accountID: String, windowTitles: [String]) {
+    public init(id: String, accountID: String, windowTitles: [String], isFailure: Bool = false) {
         self.id = id
         self.accountID = accountID
         self.windowTitles = windowTitles
+        self.isFailure = isFailure
     }
 }
 
@@ -183,11 +185,12 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
     }
 
     /// 예정 시각 사전·도달 알림의 시스템 전달과 실패 상태 기록
-    public func notifyScheduled(_ alert: QuotaResetAlert, displayName: String? = nil) async {
+    @discardableResult
+    public func notifyScheduled(_ alert: QuotaResetAlert, displayName: String? = nil) async -> Bool {
         guard await isAuthorizedForDelivery() else {
             status = replacingDelivery(outcome: .failed, error: nil)
             onDiagnostic("scheduled_notification_authorization_unavailable")
-            return
+            return false
         }
         do {
             let name = AccountDisplayName.resolved(displayName, slotID: alert.accountID)
@@ -195,10 +198,19 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
                 ? name + alert.body.dropFirst(alert.accountID.count) : alert.body
             try await backend?.deliver(title: alert.title, body: body)
             status = replacingDelivery(outcome: .delivered, error: nil)
+            return true
         } catch {
             status = replacingDelivery(outcome: .failed, error: error.localizedDescription)
             onDiagnostic("scheduled_notification_delivery_failed")
+            return false
         }
+    }
+
+    /// 자동 Ping 최종 실패의 시스템 알림 및 권한·전달 불가 시 노치 대체
+    public func notifyAutomaticPingFailure(_ alert: QuotaResetAlert, displayName: String? = nil) async {
+        guard await !notifyScheduled(alert, displayName: displayName) else { return }
+        onFallback(QuotaResetNotificationFallback(id: UUID().uuidString, accountID: alert.accountID,
+            windowTitles: ["자동 Ping 실패"], isFailure: true))
     }
 
     /// 사용자 동작으로만 테스트 알림 전달

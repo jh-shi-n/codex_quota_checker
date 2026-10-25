@@ -6,6 +6,26 @@ import XCTest
 
 @MainActor
 final class QuotaResetNotificationDeliveryTests: XCTestCase {
+    /// 자동 Ping 실패의 시스템 전달과 거부·전달 오류 시 오류 노치 대체 검증
+    func testAutomaticPingFailureUsesSystemOrOneErrorFallback() async {
+        let backend = StubNotificationBackend(status: .authorized)
+        var fallbacks: [QuotaResetNotificationFallback] = []
+        let delivery = QuotaResetNotificationDelivery(backend: backend, onFallback: { fallbacks.append($0) })
+        let alert = QuotaResetAlert(accountID: "C1", title: "할당량 자동 Ping 실패", body: "C1: 전송 실패")
+        await delivery.notifyAutomaticPingFailure(alert)
+        XCTAssertEqual(backend.delivered.count, 1)
+        XCTAssertTrue(fallbacks.isEmpty)
+        backend.status = .denied
+        await delivery.notifyAutomaticPingFailure(alert)
+        XCTAssertEqual(fallbacks.count, 1)
+        XCTAssertTrue(fallbacks[0].isFailure)
+        backend.status = .authorized
+        backend.deliveryError = StubNotificationError.delivery
+        await delivery.notifyAutomaticPingFailure(alert)
+        XCTAssertEqual(fallbacks.count, 2)
+        XCTAssertTrue(fallbacks[1].isFailure)
+    }
+
     /// 사전·도달 알림의 실제 어댑터 입력과 권한 거부·전달 실패 상태 검증
     func testScheduledAlertsUseSystemBackendAndReportUnavailableDelivery() async {
         let backend = StubNotificationBackend(status: .authorized)

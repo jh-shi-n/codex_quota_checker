@@ -12,6 +12,7 @@ public final class PreferencesStore: ObservableObject {
         public static let settingsBundle = "CodexQuotaMonitor.settings.v1"
         public static let refreshIntervalMinutes = "CodexQuotaMonitor.refreshIntervalMinutes"
         public static let resetReminderMinutes = "CodexQuotaMonitor.resetReminderMinutes"
+        public static let automaticResetPingEnabled = "CodexQuotaMonitor.automaticResetPingEnabled"
         public static let accountPaths = "CodexQuotaMonitor.accountPaths"
         public static let enabledAccountIDs = "CodexQuotaMonitor.enabledAccountIDs"
         public static let accountDisplayOrder = "CodexQuotaMonitor.accountDisplayOrder"
@@ -74,6 +75,8 @@ public final class PreferencesStore: ObservableObject {
     @Published public private(set) var refreshIntervalMinutes: Int
     /// 초기화 사전 알림 시점; 0은 사전 알림만 해제
     @Published public private(set) var resetReminderMinutes: Int
+    /// 초기화 감지 이후 최소 Ping 자동 전송 여부; 기본 미사용
+    @Published public private(set) var automaticResetPingEnabled: Bool
     @Published public private(set) var accountPaths: [String]
     /// 활성 표시 계정 ID, 빈 배열 허용
     @Published public private(set) var enabledAccountIDs: [String]
@@ -160,7 +163,7 @@ public final class PreferencesStore: ObservableObject {
         self.committedBundle = bundle
         if let bundle {
             for key in [Keys.accountPaths, Keys.enabledAccountIDs, Keys.accountDisplayOrder, Keys.accountDisplayNames,
-                        Keys.refreshIntervalMinutes, Keys.resetReminderMinutes, Keys.launchAtLogin,
+                        Keys.refreshIntervalMinutes, Keys.resetReminderMinutes, Keys.automaticResetPingEnabled, Keys.launchAtLogin,
                         Keys.showAccountLabels, Keys.activityNotificationDurationSeconds] {
                 userDefaults.removeObject(forKey: key)
             }
@@ -196,6 +199,7 @@ public final class PreferencesStore: ObservableObject {
         self.resetReminderMinutes = Self.normalizedResetReminderMinutes(
             readSetting(Keys.resetReminderMinutes) as? Int ?? 5
         )
+        self.automaticResetPingEnabled = readSetting(Keys.automaticResetPingEnabled) as? Bool ?? false
 
         let rawPaths = readSetting(Keys.accountPaths)
         let persistedPaths = rawPaths as? [String]
@@ -393,6 +397,13 @@ public final class PreferencesStore: ObservableObject {
         persist()
     }
 
+    /// 자동 Ping 선택의 영속 저장 및 저장 실패 시 기존 설정 복원
+    public func updateAutomaticResetPing(_ enabled: Bool) {
+        guard !settingsLoadFailed else { return }
+        automaticResetPingEnabled = enabled
+        persist()
+    }
+
     /// 사전 알림 선택값의 허용 범위 정규화
     nonisolated public static func normalizedResetReminderMinutes(_ minutes: Int) -> Int {
         [0, 3, 5, 10].contains(minutes) ? minutes : 5
@@ -551,7 +562,8 @@ public final class PreferencesStore: ObservableObject {
             resetReminderMinutes: resetReminderMinutes,
             activityNotificationDurationSeconds: activityNotificationDurationSeconds,
             showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin,
-            accountDisplayNames: accountDisplayNames, tokenUsageOptions: tokenUsageOptions)
+            accountDisplayNames: accountDisplayNames, tokenUsageOptions: tokenUsageOptions,
+            automaticResetPingEnabled: automaticResetPingEnabled)
     }
 
     /// 인코딩 실패 시 직전 정상 설정 복원
@@ -563,6 +575,7 @@ public final class PreferencesStore: ObservableObject {
         accountDisplayNames = Self.normalizedAccountDisplayNames(value.accountDisplayNames ?? [:])
         refreshIntervalMinutes = value.refreshIntervalMinutes
         resetReminderMinutes = value.resetReminderMinutes
+        automaticResetPingEnabled = value.automaticResetPingEnabled ?? false
         activityNotificationDurationSeconds = value.activityNotificationDurationSeconds
         showAccountLabels = value.showAccountLabels
         launchAtLogin = value.launchAtLogin
