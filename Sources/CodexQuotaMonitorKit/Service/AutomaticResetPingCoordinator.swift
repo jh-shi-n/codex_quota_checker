@@ -49,6 +49,12 @@ public final class AutomaticResetPingCoordinator {
         self.enabled = enabled
         accounts = Dictionary(states.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         for (id, operation) in operations {
+            if let current = accounts[id], current.status == .normal, !Self.canSend(current) {
+                record(.automaticResetPingSkipped, id: id, reason: "quota_unavailable_or_low")
+                operation.task.cancel()
+                operations[id] = nil
+                continue
+            }
             if !enabled || accounts[id].map({ !sameIdentity(operation.account, $0)
                 || [.notConfigured, .loginRequired, .codexNotFound].contains($0.status) }) ?? true {
                 operation.task.cancel()

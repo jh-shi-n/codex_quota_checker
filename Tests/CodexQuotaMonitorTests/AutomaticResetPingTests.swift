@@ -88,6 +88,23 @@ final class AutomaticResetPingTests: XCTestCase {
         XCTAssertTrue(h.alerts.isEmpty)
     }
 
+    /// 대기 중 소진이 정상 조회로 확인된 뒤 후속 조회가 실패해도 실패 알림 제외 검증
+    func testObservedExhaustionCancelsEvenWhenNextRefreshFails() async {
+        let h = AutomaticPingHarness()
+        h.failures = 4
+        h.onSleep = {
+            var exhausted = h.after
+            exhausted.secondaryRemainingPercent = 0
+            h.coordinator.reconcile(states: [exhausted], enabled: true)
+            exhausted.status = .error
+            h.fresh = exhausted
+        }
+        h.trigger()
+        await h.coordinator.waitForPendingOperations()
+        XCTAssertEqual(h.probes, 1)
+        XCTAssertTrue(h.alerts.isEmpty)
+    }
+
     /// 최신 할당량 조회가 계속 실패하면 Ping 미전송과 최종 실패 1회 검증
     func testPreflightFailuresNeverSendPingAndNotifyOnce() async {
         let h = AutomaticPingHarness()
