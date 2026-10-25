@@ -1,4 +1,23 @@
+// 목적: 초기화 시간 설정의 수동 실행·자동 전송 선택·결과 표시
+// 이용처: 링 버튼의 계정 상세 화면
+// 사용방법: 계정·실행 상태와 관찰 가능한 설정 호스트 연결
 import SwiftUI
+
+/// 설정 변경을 관찰하여 계정 상세 간 공통 체크 상태와 저장 실패 반영
+struct UsageWindowProbePreferencesView: View {
+    @ObservedObject var preferences: PreferencesStore
+    let section: UsageWindowProbeSection
+
+    var body: some View {
+        var content = section
+        content.automaticResetPingEnabled = Binding(
+            get: { preferences.automaticResetPingEnabled },
+            set: { preferences.updateAutomaticResetPing($0) }
+        )
+        content.automaticResetPingError = preferences.persistenceError
+        return content
+    }
+}
 
 /// 초기화 시간 설정 요청의 실행 상태와 결과 표시
 public struct UsageWindowProbeSection: View {
@@ -15,6 +34,8 @@ public struct UsageWindowProbeSection: View {
     public let lastExecutionAt: Date?
     public let isConfigured: Bool
     public let onRun: () -> Void
+    public var automaticResetPingEnabled: Binding<Bool>?
+    public var automaticResetPingError: String?
     @State private var isInformationPresented = false
 
     /// 계정과 최신 Reset 결과를 받는 섹션 생성
@@ -25,7 +46,8 @@ public struct UsageWindowProbeSection: View {
         runningStartedAt: Date? = nil,
         lastExecutionAt: Date? = nil,
         isConfigured: Bool? = nil,
-        onRun: @escaping () -> Void = {}
+        onRun: @escaping () -> Void = {},
+        automaticResetPingEnabled: Binding<Bool>? = nil
     ) {
         self.account = account
         self.probe = probe
@@ -34,6 +56,7 @@ public struct UsageWindowProbeSection: View {
         self.lastExecutionAt = lastExecutionAt
         self.isConfigured = isConfigured ?? (account.status != .notConfigured)
         self.onRun = onRun
+        self.automaticResetPingEnabled = automaticResetPingEnabled
     }
 
     public var body: some View {
@@ -42,6 +65,14 @@ public struct UsageWindowProbeSection: View {
                 Text(Self.sectionTitle)
                     .font(.headline.weight(.semibold))
                     .fixedSize()
+                if let automaticResetPingEnabled {
+                    Toggle("자동 전송", isOn: automaticResetPingEnabled)
+                        .toggleStyle(.checkbox)
+                        .fixedSize()
+                        .help("모든 계정에 공통 적용됩니다. 초기화 후 최소 Ping으로 실제 할당량을 사용하며, 주간 잔량 10% 이하·미확인 또는 5시간 잔량 소진 시 생략합니다.")
+                        .accessibilityIdentifier("automatic-reset-ping-toggle")
+                        .accessibilityLabel("할당량 초기화 시 자동 전송")
+                }
                 Button { isInformationPresented.toggle() } label: {
                     Image(systemName: "info.circle")
                         .font(.system(size: 13))
@@ -61,6 +92,13 @@ public struct UsageWindowProbeSection: View {
                     .padding(16)
                     .frame(width: 290, alignment: .leading)
                 }
+            }
+
+            if let automaticResetPingError {
+                Text(automaticResetPingError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(alignment: .leading, spacing: 8) {
