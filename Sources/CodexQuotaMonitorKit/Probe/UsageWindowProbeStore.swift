@@ -9,15 +9,19 @@ import Foundation
 public final class UsageWindowProbeStore: ObservableObject {
     public static let shared = UsageWindowProbeStore()
 
-    /// 경로 변경 전후의 동일 슬롯 작업과 결과 분리
+    /// 경로·로그인·구독 변경 전후의 동일 슬롯 작업과 결과 분리
     private struct Key: Hashable {
         let id: String
         let generation: Int
+        let email: String?
+        let planType: String?
 
         /// 계정 슬롯과 설정 세대로 식별자 생성
         init(_ account: AccountState) {
             id = account.id
             generation = account.configurationGeneration
+            email = account.email
+            planType = account.planType
         }
     }
 
