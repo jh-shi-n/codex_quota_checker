@@ -9,6 +9,7 @@ public struct CodexLocator: CodexLocating, Sendable {
     public static let defaultCandidatePaths: [URL] = [
         URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
         URL(fileURLWithPath: "/usr/local/bin/codex"),
+        URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"),
     ]
 
     public let pathEnvironment: String?

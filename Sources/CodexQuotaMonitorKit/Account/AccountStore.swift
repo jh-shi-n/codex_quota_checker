@@ -68,7 +68,8 @@ public final class AccountStore: ObservableObject {
         configs: [AccountConfig] = AccountConfig.defaultAccounts(),
         preferencesStore: PreferencesStore? = nil,
         stateLoader: @escaping AccountStateLoader = { config in
-            await CodexQuotaService().state(for: config)
+            if config.provider == .claude { return await ClaudeQuotaService.shared.state(for: config) }
+            return await CodexQuotaService().state(for: config)
         }
     ) {
         let normalized = Self.normalizeConfigs(configs)
@@ -244,7 +245,7 @@ public final class AccountStore: ObservableObject {
     /// overload preserves empty slots instead of first converting them to a
     /// current-working-directory URL.
     public func reconfigure(pathStrings: [String]) {
-        reconfigure(AccountConfig.accounts(for: pathStrings))
+        reconfigure(AccountConfig.accounts(for: pathStrings, providers: preferencesStore.accountProviders))
     }
 
     public static func split(_ states: [AccountState], side: AccountPosition) -> [AccountState] {
@@ -358,6 +359,7 @@ public final class AccountStore: ObservableObject {
             if Self.shouldPreservePreviousSnapshot(for: state.status) {
                 state = Self.mergedNonNormalState(state, previous: previous, id: config.id)
             }
+            state.provider = config.provider
             return AccountFetchResult(config: config, state: state)
         } catch {
             return AccountFetchResult(
@@ -489,7 +491,7 @@ public final class AccountStore: ObservableObject {
             return AccountState.notConfigured(id: config.id)
         }
         guard let snapshot = preferencesStore.quotaSnapshot(for: config.home) else {
-            return AccountState.loading(id: config.id)
+            return AccountState(id: config.id, status: .loading, provider: config.provider)
         }
         return AccountState(
             id: config.id,
@@ -501,7 +503,7 @@ public final class AccountStore: ObservableObject {
             secondaryResetAt: snapshot.secondaryResetAt,
             resetCredits: snapshot.resetCredits,
             lastUpdated: snapshot.lastUpdated,
-            status: .loading
+            status: .loading, provider: config.provider
         )
     }
 
@@ -512,7 +514,7 @@ public final class AccountStore: ObservableObject {
             state.configurationGeneration = previous?.configurationGeneration ?? 0
             return state
         }
-        guard let previous else { return AccountState.loading(id: config.id) }
+        guard let previous else { return AccountState(id: config.id, status: .loading, provider: config.provider) }
         var state = previous
         state.status = .loading
         state.errorMessage = nil
@@ -525,7 +527,7 @@ public final class AccountStore: ObservableObject {
         message: String
     ) -> AccountState {
         guard let previous else {
-            return AccountState(id: config.id, status: .error, errorMessage: message)
+            return AccountState(id: config.id, status: .error, errorMessage: message, provider: config.provider)
         }
         return AccountState(
             id: config.id,
@@ -538,7 +540,7 @@ public final class AccountStore: ObservableObject {
             resetCredits: previous.resetCredits,
             lastUpdated: previous.lastUpdated,
             status: .error,
-            errorMessage: message
+            errorMessage: message, provider: config.provider
         )
     }
 

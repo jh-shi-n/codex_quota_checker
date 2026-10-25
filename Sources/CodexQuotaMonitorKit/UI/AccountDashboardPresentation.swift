@@ -109,6 +109,7 @@ public enum AccountDashboardFormatting {
         case "pro": return "프로"
         case "prolite": return "프로 라이트"
         case "promax": return "프로 맥스"
+        case "max": return "Max"
         case "team": return "팀"
         case "business": return "비즈니스"
         case "self_serve_business_prolite": return "비즈니스 프로 라이트"

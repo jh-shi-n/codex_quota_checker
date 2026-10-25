@@ -75,6 +75,19 @@ open "$PWD/codex/CodexQuotaChecker.app"
 - Collect token usage with the **Update (`업데이트`)** button in account details
 - If you defer setup, reopen the guide from the menu bar icon
 
+### Add a Claude account
+
+1. Sign in to a subscription account in Claude Code (`claude auth login --claudeai`).
+2. In the app settings, select `Claude` for an empty slot.
+3. Set its account folder to `~/.claude` and apply the path.
+
+- Shows five-hour and weekly remaining quotas and reset times; mix Codex and Claude within the four slots.
+- Usage queries send no model requests and consume no additional model tokens. Subscription charges are separate.
+- Uses the existing Claude Code Keychain login without copying credentials into settings, caches, or logs. Sign in again in Claude Code when credentials expire. Custom folders use their own `.credentials.json`.
+- Queries are limited to once per minute, with a five-minute pause after errors.
+- Integration depends on an undocumented usage endpoint and may need updates when the service changes.
+- Claude supports quota monitoring only. Token charts, session activity, reset credits, and model pings remain Codex features. Codex pings can consume model tokens.
+
 ## Settings
 
 - Account folders and displayed accounts

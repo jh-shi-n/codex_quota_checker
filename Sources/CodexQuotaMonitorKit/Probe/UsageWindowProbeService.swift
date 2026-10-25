@@ -924,6 +924,11 @@ public actor UsageWindowProbeService {
         let startedAt = clock()
         let startedUptime = ProcessInfo.processInfo.systemUptime
         let commandMetadata = commandBuilder.metadata
+        guard config.provider == .codex else {
+            return UsageWindowProbeResult(accountID: config.id, status: .failure,
+                                          startedAt: startedAt, completedAt: clock(),
+                                          failureCategory: .notConfigured, commandMetadata: commandMetadata)
+        }
         if activeAccountIDs.contains(config.id) {
             DiagnosticLogContext.record(.probeRejected, accountID: config.id,
                                         fields: [.reason: .identifier("already_running")])

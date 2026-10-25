@@ -122,6 +122,15 @@ extension CodexQuotaMonitorAppDelegate {
             tokenUsageOptions: Binding(
                 get: { [weak self] in self?.preferences.tokenUsageOptions ?? TokenUsageOptions() },
                 set: { [weak self] in self?.applyTokenUsageOptions($0) }
+            ),
+            accountProviders: Binding(
+                get: { [weak self] in self?.preferences.accountProviders ?? [:] },
+                set: { [weak self] providers in
+                    guard let self, self.preferences.updateAccountProviders(providers) else { return }
+                    Task { @MainActor in
+                        await self.lifecycleCoordinator.reconfigure(paths: self.preferences.accountPaths)
+                    }
+                }
             )
         )
         .safeAreaInset(edge: .top) { StorageStatusView(preferences: preferences) }

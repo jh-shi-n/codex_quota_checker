@@ -14,6 +14,7 @@ public final class PreferencesStore: ObservableObject {
         public static let resetReminderMinutes = "CodexQuotaMonitor.resetReminderMinutes"
         public static let automaticResetPingEnabled = "CodexQuotaMonitor.automaticResetPingEnabled"
         public static let accountPaths = "CodexQuotaMonitor.accountPaths"
+        public static let accountProviders = "CodexQuotaMonitor.accountProviders"
         public static let enabledAccountIDs = "CodexQuotaMonitor.enabledAccountIDs"
         public static let accountDisplayOrder = "CodexQuotaMonitor.accountDisplayOrder"
         public static let accountDisplayNames = "CodexQuotaMonitor.accountDisplayNames"
@@ -78,6 +79,7 @@ public final class PreferencesStore: ObservableObject {
     /// 초기화 감지 이후 최소 Ping 자동 전송 여부; 기본 미사용
     @Published public private(set) var automaticResetPingEnabled: Bool
     @Published public private(set) var accountPaths: [String]
+    @Published public private(set) var accountProviders: [String: AccountProvider]
     /// 활성 표시 계정 ID, 빈 배열 허용
     @Published public private(set) var enabledAccountIDs: [String]
     /// C1–C4 전체 계정의 표시 순서
@@ -209,6 +211,8 @@ public final class PreferencesStore: ObservableObject {
             homeDirectory: self.homeDirectory
         )
         self.accountPaths = normalizedPathResult.values
+        self.accountProviders = (readSetting(Keys.accountProviders) as? [String: AccountProvider] ?? [:])
+            .filter { Self.stableAccountIDs.contains($0.key) }
         if bundle == nil && loadError == nil && normalizedPathResult.values.contains(where: { !$0.isEmpty }) {
             self.hasRegisteredAccount = true
         }
@@ -458,6 +462,22 @@ public final class PreferencesStore: ObservableObject {
         return persist()
     }
 
+    /// 서비스 변경 시 이전 할당량 캐시를 지우고 계정 종류를 저장
+    @discardableResult
+    public func updateAccountProviders(_ providers: [String: AccountProvider]) -> Bool {
+        guard !settingsLoadFailed else { return false }
+        let normalized = providers.filter { Self.stableAccountIDs.contains($0.key) }
+        guard normalized != accountProviders else { return true }
+        let changedIDs = Self.stableAccountIDs.filter { (accountProviders[$0] ?? .codex) != (normalized[$0] ?? .codex) }
+        let previous = accountProviders
+        accountProviders = normalized
+        guard persist() else { accountProviders = previous; return false }
+        for id in changedIDs {
+            if let index = Self.stableAccountIDs.firstIndex(of: id) { removeQuotaSnapshot(for: accountPaths[index]) }
+        }
+        return true
+    }
+
     /// 목적: 활성 계정 ID를 정규화해 게시·저장
     /// 조건: 빈 배열 허용, 유효한 C1–C4 ID만 유지
     public func updateEnabledAccountIDs(_ ids: [String]) {
@@ -563,13 +583,14 @@ public final class PreferencesStore: ObservableObject {
             activityNotificationDurationSeconds: activityNotificationDurationSeconds,
             showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin,
             accountDisplayNames: accountDisplayNames, tokenUsageOptions: tokenUsageOptions,
-            automaticResetPingEnabled: automaticResetPingEnabled)
+            automaticResetPingEnabled: automaticResetPingEnabled, accountProviders: accountProviders.isEmpty ? nil : accountProviders)
     }
 
     /// 인코딩 실패 시 직전 정상 설정 복원
     private func restore(_ value: AppPreferencesPayload) {
         tokenUsageOptions = value.tokenUsageOptions ?? TokenUsageOptions()
         accountPaths = value.accountPaths
+        accountProviders = value.accountProviders ?? [:]
         enabledAccountIDs = value.enabledAccountIDs
         accountDisplayOrder = value.accountDisplayOrder
         accountDisplayNames = Self.normalizedAccountDisplayNames(value.accountDisplayNames ?? [:])

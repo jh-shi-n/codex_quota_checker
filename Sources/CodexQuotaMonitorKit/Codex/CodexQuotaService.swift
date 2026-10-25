@@ -138,7 +138,7 @@ public struct CodexQuotaService: Sendable {
     func consumeResetCreditSync(
         for config: AccountConfig, creditID: String, idempotencyKey: String
     ) -> Result<ResetCreditOutcome, CodexQuotaServiceError> {
-        guard config.isConfigured else { return .failure(.notConfigured) }
+        guard config.isConfigured, config.provider == .codex else { return .failure(.notConfigured) }
         guard !creditID.isEmpty, !idempotencyKey.isEmpty else {
             return .failure(.protocolError("리셋권 식별자 또는 요청 키가 없습니다."))
         }
@@ -214,7 +214,7 @@ public struct CodexQuotaService: Sendable {
         cancellation: CodexQuotaFetchCancellation?
     ) -> Result<CodexQuota, CodexQuotaServiceError> {
         guard cancellation?.isCancelled != true else { return .failure(.cancelled) }
-        guard config.isConfigured else {
+        guard config.isConfigured, config.provider == .codex else {
             return .failure(.notConfigured)
         }
         guard FileManager.default.fileExists(atPath: config.authFile.path) else {
@@ -286,7 +286,7 @@ public struct CodexQuotaService: Sendable {
         for config: AccountConfig, cancellation: CodexQuotaFetchCancellation? = nil
     ) -> Result<AccountTokenUsage, CodexQuotaServiceError> {
         guard cancellation?.isCancelled != true else { return .failure(.cancelled) }
-        guard config.isConfigured else { return .failure(.notConfigured) }
+        guard config.isConfigured, config.provider == .codex else { return .failure(.notConfigured) }
         guard FileManager.default.fileExists(atPath: config.authFile.path) else { return .failure(.loginRequired) }
         guard let executable = locator.locate() else { return .failure(.codexNotFound) }
         let deadline = Date().addingTimeInterval(Self.overallTimeout)

@@ -331,7 +331,8 @@ public struct QuotaDonutView: View {
         let fiveHour = account.fiveHourRemainingPercent.map(Self.percentText) ?? "—"
         let overall = presentation.ringPercent.map(Self.percentText) ?? "—"
         let name = AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id)
-        let quotaText = "5h \(fiveHour) · Overall \(overall)"
+        let windowName = account.provider == .claude ? "7d" : "Overall"
+        let quotaText = "5h \(fiveHour) · \(windowName) \(overall)"
         switch state {
         case .value, .fiveHourOnly:
             return "\(name) · \(quotaText)"

@@ -109,7 +109,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         let preferences = PreferencesStore(configurationFile: AppConfigurationFile(fileURL: AppConfigurationFile.defaultFileURL))
         let serviceStatus = OpenAIServiceStatusStore()
         let accountStore = AccountStore(
-            configs: AccountConfig.accounts(for: preferences.accountPaths),
+            configs: AccountConfig.accounts(for: preferences.accountPaths, providers: preferences.accountProviders),
             preferencesStore: preferences
         )
         let refreshService = RefreshService(
@@ -220,7 +220,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     let generation = sessionActivityDelivery.pause()
                     // 경로가 달라진 슬롯만 동기 무효화하여 다른 계정의 기록 보존
                     let previousHomes = Self.configuredHomes(for: accountStore.configs)
-                    let nextHomes = Self.configuredHomes(for: AccountConfig.accounts(for: paths))
+                    let nextHomes = Self.configuredHomes(for: AccountConfig.accounts(for: paths, providers: preferences.accountProviders))
                     for accountID in Set(previousHomes.keys).union(nextHomes.keys) {
                         if previousHomes[accountID] != nextHomes[accountID] {
                             AccountTokenUsageStore.shared.invalidate(accountID: accountID)
@@ -263,6 +263,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         AccountTokenUsageStore.shared.loader = { [weak self] account in
             guard let self,
                   let config = self.accountStore.configs.first(where: { $0.id == account.id }),
+                  config.provider == .codex,
                   self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
             else { return .failure(.notConfigured) }
             let result = await CodexQuotaService().fetchTokenUsage(for: config)
@@ -374,13 +375,13 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.accountStore.refresh(accountID: id)
-            guard let account = self.accountStore.state(for: id) else { return }
+            guard let account = self.accountStore.state(for: id), account.provider == .codex else { return }
             await AccountTokenUsageStore.shared.refresh(for: account, force: true)?.value
         }
     }
 
     private func loadSessionActivity(_ account: AccountState) async -> SessionActivitySnapshot {
-        guard let home = accountStore.configs.first(where: { $0.id == account.id })?.configuredHome else {
+        guard account.provider == .codex, let home = accountStore.configs.first(where: { $0.id == account.id })?.configuredHome else {
             return .unavailable(accountID: account.id)
         }
         return await sessionActivityProvider.snapshot(accountID: account.id, home: home)
@@ -391,7 +392,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         _ account: AccountState, creditID: String, attempt: String
     ) async -> Result<ResetCreditOutcome, CodexQuotaServiceError> {
         guard let config = accountStore.configs.first(where: { $0.id == account.id }),
-              config.isConfigured,
+              config.isConfigured, config.provider == .codex,
               accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
         else { return .failure(.notConfigured) }
         let result = await CodexQuotaService().consumeResetCredit(
@@ -409,7 +410,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         _ account: AccountState
     ) async -> UsageWindowProbePresentationResult {
         guard let config = accountStore.configs.first(where: { $0.id == account.id }),
-              config.isConfigured,
+              config.isConfigured, config.provider == .codex,
               accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
         else {
             return AccountDashboardDefaults.unavailableProbe(
@@ -458,7 +459,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 서버 캐시 무효화를 위한 슬롯별 계정 경로 구성
     private static func configuredHomes(for configs: [AccountConfig]) -> [String: URL] {
-        Dictionary(uniqueKeysWithValues: configs.compactMap { config in
+        Dictionary(uniqueKeysWithValues: configs.filter { $0.provider == .codex }.compactMap { config in
             config.configuredHome.map { (config.id, $0) }
         })
     }

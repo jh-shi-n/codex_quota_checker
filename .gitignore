@@ -14,6 +14,10 @@ __pycache__/
 !.env.example
 .codex/
 .codex-*/
+.claude/
+.claude-*/
+.claude.json
+.credentials.json
 auth.json
 *.sqlite
 *.sqlite-*

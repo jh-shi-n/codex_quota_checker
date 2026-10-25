@@ -3,6 +3,7 @@ import Foundation
 /// Immutable snapshot consumed by the UI for one account.
 public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     public let id: String
+    public var provider: AccountProvider = .codex
     /// 경로 변경 시 상세 화면 상태를 분리하는 비영속 슬롯 세대
     public var configurationGeneration = 0
     /// 서버의 통합 리셋권 잔여 개수와 선택적 소멸일 목록
@@ -84,9 +85,11 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
         resetCredits: RateLimitResetCredits? = nil,
         lastUpdated: Date? = nil,
         status: AccountStatus,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        provider: AccountProvider = .codex
     ) {
         self.resetCredits = resetCredits
+        self.provider = provider
         self.id = id
         self.email = email
         self.planType = planType
@@ -140,6 +143,7 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
         case primaryResetAt, secondaryResetAt
         case usedPercent, remainingPercent, resetAt
         case lastUpdated, status, errorMessage
+        case provider
     }
 
     public init(from decoder: Decoder) throws {
@@ -160,7 +164,8 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
             resetCredits: try container.decodeIfPresent(RateLimitResetCredits.self, forKey: .resetCredits),
             lastUpdated: try container.decodeIfPresent(Date.self, forKey: .lastUpdated),
             status: try container.decode(AccountStatus.self, forKey: .status),
-            errorMessage: try container.decodeIfPresent(String.self, forKey: .errorMessage)
+            errorMessage: try container.decodeIfPresent(String.self, forKey: .errorMessage),
+            provider: try container.decodeIfPresent(AccountProvider.self, forKey: .provider) ?? .codex
         )
     }
 
@@ -168,6 +173,7 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(resetCredits, forKey: .resetCredits)
         try container.encode(id, forKey: .id)
+        try container.encode(provider, forKey: .provider)
         try container.encodeIfPresent(email, forKey: .email)
         try container.encodeIfPresent(planType, forKey: .planType)
         try container.encodeIfPresent(primaryUsedPercent, forKey: .primaryUsedPercent)

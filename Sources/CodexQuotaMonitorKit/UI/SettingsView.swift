@@ -105,6 +105,7 @@ public struct SettingsView: View {
     @Binding public var resetReminderMinutes: Int
     @Binding public var automaticResetPingEnabled: Bool
     @Binding public var accountPaths: [String]
+    @Binding public var accountProviders: [String: AccountProvider]
     @Binding public var accountDisplayNames: [String: String]
     @Binding public var launchAtLogin: Bool
     @Binding public var showAccountLabels: Bool
@@ -147,9 +148,11 @@ public struct SettingsView: View {
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
         onOpenNotificationSettings: @escaping () -> Void = {},
-        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions())
+        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions()),
+        accountProviders: Binding<[String: AccountProvider]> = .constant([:])
     ) {
         self._tokenUsageOptions = tokenUsageOptions
+        self._accountProviders = accountProviders
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._resetReminderMinutes = resetReminderMinutes
         self._automaticResetPingEnabled = automaticResetPingEnabled
@@ -200,9 +203,11 @@ public struct SettingsView: View {
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
         onOpenNotificationSettings: @escaping () -> Void = {},
-        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions())
+        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions()),
+        accountProviders: Binding<[String: AccountProvider]> = .constant([:])
     ) {
         self._tokenUsageOptions = tokenUsageOptions
+        self._accountProviders = accountProviders
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._resetReminderMinutes = resetReminderMinutes
         self._automaticResetPingEnabled = automaticResetPingEnabled
@@ -282,6 +287,13 @@ public struct SettingsView: View {
                                 Text("C\(index + 1)")
                                     .font(.caption.weight(.semibold))
                                     .frame(width: 28, alignment: .leading)
+                                Picker("서비스", selection: providerBinding(for: "C\(index + 1)")) {
+                                    ForEach(AccountProvider.allCases, id: \.self) { provider in
+                                        Text(provider.displayName).tag(provider)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 100)
                                 TextField("계정 이름 (최대 14자)", text: nameBinding(for: "C\(index + 1)"))
                                     .textFieldStyle(.roundedBorder)
                                     .accessibilityLabel("C\(index + 1) 사용자 이름")
@@ -620,6 +632,14 @@ public struct SettingsView: View {
             return
         }
         refreshIntervalMinutes = value
+    }
+
+    private func providerBinding(for id: String) -> Binding<AccountProvider> {
+        Binding(get: { accountProviders[id] ?? .codex }, set: { value in
+            var providers = accountProviders
+            providers[id] = value
+            accountProviders = providers
+        })
     }
 
     /// 적용 전까지 초안만 갱신하는 계정 경로 바인딩

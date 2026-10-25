@@ -122,15 +122,17 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
     public let id: String
     public let home: URL
     public let position: AccountPosition
+    public let provider: AccountProvider
     /// Explicitly distinguishes an empty settings slot from a real CODEX_HOME.
     /// `home` remains a URL for source compatibility with existing hosts, but
     /// callers must use `configuredHome` when accessing the filesystem.
     public let isConfigured: Bool
 
-    public init(id: String, home: URL, position: AccountPosition) {
+    public init(id: String, home: URL, position: AccountPosition, provider: AccountProvider = .codex) {
         self.id = id
         self.home = home.standardizedFileURL
         self.position = position
+        self.provider = provider
         self.isConfigured = true
     }
 
@@ -138,6 +140,7 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
         self.id = id
         self.home = Self.unconfiguredHomeURL(for: id)
         self.position = position
+        self.provider = .codex
         self.isConfigured = false
     }
 
@@ -153,13 +156,14 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
         id: String,
         path: String,
         position: AccountPosition,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        provider: AccountProvider = .codex
     ) {
         let normalized = Self.normalizedPath(path, homeDirectory: homeDirectory)
         if normalized.isEmpty {
             self.init(id: id, unconfiguredPosition: position)
         } else {
-            self.init(id: id, home: URL(fileURLWithPath: normalized), position: position)
+            self.init(id: id, home: URL(fileURLWithPath: normalized), position: position, provider: provider)
         }
     }
 
@@ -186,12 +190,14 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
         case home
         case position
         case isConfigured
+        case provider
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let id = try container.decode(String.self, forKey: .id)
         let position = try container.decode(AccountPosition.self, forKey: .position)
+        let provider = try container.decodeIfPresent(AccountProvider.self, forKey: .provider) ?? .codex
         let decodedHome = try container.decodeIfPresent(URL.self, forKey: .home)
         let configuredFlag = try container.decodeIfPresent(Bool.self, forKey: .isConfigured)
 
@@ -211,7 +217,7 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
         }
 
         if configuredFlag == true {
-            self.init(id: id, home: decodedHome, position: position)
+            self.init(id: id, home: decodedHome, position: position, provider: provider)
             return
         }
 
@@ -221,7 +227,7 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
         if legacyPath.isEmpty || decodedHome.scheme == "codex-unconfigured" {
             self.init(id: id, unconfiguredPosition: position)
         } else {
-            self.init(id: id, home: decodedHome, position: position)
+            self.init(id: id, home: decodedHome, position: position, provider: provider)
         }
     }
 
@@ -229,6 +235,7 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(position, forKey: .position)
+        try container.encode(provider, forKey: .provider)
         try container.encode(isConfigured, forKey: .isConfigured)
         // Keep a home key for old decoders while ensuring an unconfigured
         // value cannot be interpreted as a relative file URL/CWD.
@@ -280,7 +287,8 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
     /// Builds stable C1-C4 configurations from persisted settings paths.
     public static func accounts(
         for paths: [String],
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        providers: [String: AccountProvider] = [:]
     ) -> [AccountConfig] {
         let defaults = defaultAccounts(homeDirectory: homeDirectory)
         return stableAccountIDs.enumerated().map { index, id in
@@ -289,7 +297,8 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
                 id: id,
                 path: paths[index],
                 position: index < 2 ? .left : .right,
-                homeDirectory: homeDirectory
+                homeDirectory: homeDirectory,
+                provider: providers[id] ?? .codex
             )
         }
     }

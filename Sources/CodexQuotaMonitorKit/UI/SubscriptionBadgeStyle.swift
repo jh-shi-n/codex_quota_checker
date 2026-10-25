@@ -28,7 +28,7 @@ enum SubscriptionBadgeStyle {
         case "prolite", "self_serve_business_prolite": return (1.00, 0.76, 0.42)
         case "pro", "team", "business", "self_serve_business_usage_based", "edu_pro":
             return (1.00, 0.60, 0.40)
-        case "promax": return (1.00, 0.44, 0.42)
+        case "promax", "max": return (1.00, 0.44, 0.42)
         case "enterprise", "ent26", "enterprise_cbp_automation", "enterprise_cbp_usage_based":
             return (1.00, 0.40, 0.48)
         default: return (0.72, 0.74, 0.78)

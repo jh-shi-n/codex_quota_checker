@@ -2,7 +2,7 @@
 
 **KOR** | [ENG](README.en.md)
 
-- macOS 메뉴 막대·노치에서 최대 4개 Codex 계정의 할당량과 로컬 활동 확인
+- macOS 메뉴 막대·노치에서 최대 4개 Codex·Claude 계정의 할당량과 Codex 로컬 활동 확인
 - Codex를 활용해 제작한 비공식 독립 앱
 
 ![앱 화면 예시](resource/images/app-example.png)
@@ -23,7 +23,8 @@
 ## 요구 사항
 
 - macOS 14 이상
-- 설치·로그인된 Codex CLI
+- Codex 계정: 설치·로그인된 Codex CLI
+- Claude 계정: Claude Code에서 구독 계정 로그인, 기본 계정 폴더 `~/.claude`
 - 시스템 알림 사용 시 `.app` 실행과 macOS 알림 권한 허용
 
 ## 설치
@@ -74,6 +75,21 @@ open "$PWD/codex/CodexQuotaChecker.app"
 - 중앙 숫자: 5시간 잔여율, 외곽 링: 주간 잔여율
 - 토큰 사용량은 상세 화면의 `업데이트` 버튼으로 집계
 - 연결을 미룬 경우 메뉴 막대 아이콘에서 연결 가이드 재진입
+
+### Claude 계정 추가
+
+1. Claude Code에서 구독 계정으로 로그인 (`claude auth login --claudeai`)
+2. 앱 설정의 빈 슬롯에서 서비스를 `Claude`로 선택
+3. 계정 폴더에 `~/.claude`를 입력하고 경로 적용
+
+- 5시간·주간 잔여율과 초기화 시각 표시, Codex와 혼합하여 최대 4개 슬롯 사용
+- 사용량 조회는 모델 요청을 보내지 않으며 추가 모델 토큰을 소비하지 않음; 기존 구독료는 별도
+- Claude Code의 기존 키체인 로그인 사용, 인증 토큰을 앱 설정·캐시·로그에 복사하지 않음
+- 로그인 만료 시 Claude Code에서 다시 로그인, 사용자 지정 폴더는 해당 폴더의 `.credentials.json` 사용
+- 사용량 조회 간격은 최소 1분, 오류 발생 시 5분 대기
+- Claude의 비공개 사용량 조회 응답에 의존하므로 서비스 변경 시 연동 수정이 필요할 수 있음
+- Claude는 할당량 조회만 지원; 토큰 차트·세션 활동·리셋권·초기화 Ping은 Codex 전용
+- Codex의 수동·자동 초기화 Ping은 모델 요청을 보내며 토큰 사용량이 발생할 수 있음
 
 ## 설정
 

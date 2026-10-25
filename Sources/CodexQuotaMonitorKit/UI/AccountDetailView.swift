@@ -61,23 +61,29 @@ public struct AccountDetailView: View {
 
                 AccountQuotaSection(account: displayedAccount)
 
-                if let tokenUsagePreferences {
-                    AccountTokenUsagePreferencesView(account: account, preferences: tokenUsagePreferences)
+                if account.provider == .codex {
+                    if let tokenUsagePreferences {
+                        AccountTokenUsagePreferencesView(account: account, preferences: tokenUsagePreferences)
+                    } else {
+                        AccountTokenUsageView(account: account, store: .shared)
+                    }
+
+                    accountActivity
+
+                    UsageWindowProbeSection(
+                        account: displayedAccount,
+                        probe: currentProbePresentation,
+                        isRunning: isProbeRunning,
+                        runningStartedAt: probeStore.startedAt(for: account),
+                        lastExecutionAt: probeStore.lastStartedAt(for: account),
+                        isConfigured: displayedAccount.status != .notConfigured,
+                        onRun: runProbe
+                    )
                 } else {
-                    AccountTokenUsageView(account: account, store: .shared)
+                    Text("Claude는 5시간·주간 할당량을 표시합니다. 조회는 모델 요청을 보내지 않습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-
-                accountActivity
-
-                UsageWindowProbeSection(
-                    account: displayedAccount,
-                    probe: currentProbePresentation,
-                    isRunning: isProbeRunning,
-                    runningStartedAt: probeStore.startedAt(for: account),
-                    lastExecutionAt: probeStore.lastStartedAt(for: account),
-                    isConfigured: displayedAccount.status != .notConfigured,
-                    onRun: runProbe
-                )
 
                 if let errorMessage = account.errorMessage, !errorMessage.isEmpty {
                     Text(errorMessage)
@@ -113,6 +119,9 @@ public struct AccountDetailView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
+                    if AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id) != account.provider.displayName {
+                        Text(account.provider.displayName).font(.caption).foregroundStyle(.secondary)
+                    }
                     Text(AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id))
                         .font(.title3.weight(.semibold))
                         .lineLimit(1)
@@ -130,7 +139,7 @@ public struct AccountDetailView: View {
                                 lineWidth: 1
                             )
                         }
-                    if let serviceStatus {
+                    if account.provider == .codex, let serviceStatus {
                         OpenAIServiceStatusBadge(store: serviceStatus)
                     }
                     Button(action: onSettings) {
@@ -147,8 +156,10 @@ public struct AccountDetailView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    ResetCreditsBadge(account: displayedAccount, consume: consumeResetCredit)
-                        .fixedSize()
+                    if account.provider == .codex {
+                        ResetCreditsBadge(account: displayedAccount, consume: consumeResetCredit)
+                            .fixedSize()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
