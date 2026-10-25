@@ -859,12 +859,15 @@ final class QuotaPresentationTests: XCTestCase {
         )
     }
 
+    /// 실제 제거 완료를 최대 2초까지 확인하는 비동기 대기
     private func waitForPresentationRemoval(
         _ model: SessionActivityPresentationModel
     ) async {
-        for _ in 0..<50 {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline {
             if model.sessions.isEmpty { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
         }
     }
 
@@ -1527,10 +1530,12 @@ final class QuotaPresentationTests: XCTestCase {
     }
 }
 
+/// 제거 지연 요청의 실제 진입과 명시적 해제를 제어하는 테스트 경계
 private actor PresentationSleepGate {
     private var continuations: [CheckedContinuation<Void, Never>] = []
     private(set) var requestedDurations: [TimeInterval] = []
 
+    /// 요청 시간을 보존하고 테스트의 해제까지 대기
     func sleep(_ duration: TimeInterval) async {
         requestedDurations.append(duration)
         await withCheckedContinuation { continuation in
@@ -1538,13 +1543,18 @@ private actor PresentationSleepGate {
         }
     }
 
+    /// 스케줄링 횟수 대신 실제 대기 진입을 최대 2초까지 확인
     func waitUntilEntered() async {
-        for _ in 0..<100 {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline {
             if !continuations.isEmpty { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
         }
+        XCTFail("제거 지연 작업의 대기 진입 시간 초과")
     }
 
+    /// 진입한 제거 지연 작업 전체 해제
     func release() {
         let pending = continuations
         continuations.removeAll()
