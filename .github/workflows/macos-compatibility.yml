@@ -48,17 +48,22 @@ jobs:
         run: |
           python3 - <<'PY'
           import os
+          from pathlib import Path
+          import re
+          import signal
           import subprocess
           import time
 
-          executable = os.path.join(os.environ['RUNNER_TEMP'], 'CodexQuotaChecker.app/Contents/MacOS/CodexQuotaMonitor')
-          process = subprocess.Popen([executable], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-          try:
-              time.sleep(5)
-              if process.poll() is not None:
-                  raise SystemExit(f'App exited during startup ({process.returncode}): {process.stderr.read().decode(errors="replace")}')
-          finally:
-              if process.poll() is None:
-                  process.terminate()
-                  process.wait(timeout=10)
+          app = os.path.join(os.environ['RUNNER_TEMP'], 'CodexQuotaChecker.app')
+          executable = os.path.join(app, 'Contents/MacOS/CodexQuotaMonitor')
+          subprocess.run(['open', '-n', app], check=True)
+          time.sleep(5)
+          result = subprocess.run(['pgrep', '-f', '^' + re.escape(executable) + '$'], capture_output=True, text=True)
+          if result.returncode != 0:
+              reports = sorted((Path.home() / 'Library/Logs/DiagnosticReports').glob('CodexQuotaMonitor*.ips'))
+              for report in reports[-2:]:
+                  print(report.read_text(errors='replace')[:20000])
+              raise SystemExit('App is not running after launch through LaunchServices')
+          for pid in result.stdout.split():
+              os.kill(int(pid), signal.SIGTERM)
           PY
