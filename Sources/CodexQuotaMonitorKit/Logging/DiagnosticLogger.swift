@@ -8,9 +8,26 @@ import Darwin
 import Foundation
 import OSLog
 
+/// 동일 프로세스·동일 디렉터리의 로거를 파일 잠금 이전에 직렬화하는 공유 경계
+private final class DiagnosticStorageLockPool: @unchecked Sendable {
+    private let registryLock = NSLock()
+    private var locks: [String: NSLock] = [:]
+
+    /// 디렉터리별 잠금의 원자적 생성·재사용
+    func lock(for path: String) -> NSLock {
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        if let existing = locks[path] { return existing }
+        let lock = NSLock()
+        locks[path] = lock
+        return lock
+    }
+}
+
 /// - 목적: 진단 이벤트 기록·정리·동기화
 /// - 보관: 사용자 로그 폴더의 현지 날짜별 7일·10MB 제한 JSONL 저장
 public final class DiagnosticLogger: @unchecked Sendable {
+    private static let processLocks = DiagnosticStorageLockPool()
     /// - 목적: 앱 운영용 로거, XCTest에서는 임시 저장소·비활성 운영 기능 사용
     public static let shared = makeShared()
     /// - 목적: 관리 대상 JSONL의 기본 총 바이트 상한
@@ -26,6 +43,7 @@ public final class DiagnosticLogger: @unchecked Sendable {
     private static let maximumReadableFileBytes = defaultMaximumBytes + 1_048_576
 
     private let directory: URL
+    private let processStorageLock: NSLock
     private let now: @Sendable () -> Date
     private let maxBytes: Int
     private let maxAge: TimeInterval
@@ -64,8 +82,10 @@ public final class DiagnosticLogger: @unchecked Sendable {
         osLogEnabled: Bool = true,
         timerEnabled: Bool = true
     ) {
-        self.directory = (directory ?? FileManager.default.homeDirectoryForCurrentUser
+        let resolvedDirectory = (directory ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/CodexQuotaMonitor", isDirectory: true)).standardizedFileURL
+        self.directory = resolvedDirectory
+        self.processStorageLock = Self.processLocks.lock(for: resolvedDirectory.path)
         self.now = now
         self.maxBytes = min(Self.defaultMaximumBytes, max(1, maxBytes))
         self.maxAge = maxAge.isFinite
@@ -172,6 +192,8 @@ public final class DiagnosticLogger: @unchecked Sendable {
     /// - 목적: 저장 디렉터리 검증 및 프로세스 간 배타 잠금
     /// - 반환: 안전한 디렉터리 파일 디스크립터를 전달한 작업 결과
     private func withStorageLock(_ body: (Int32) -> Void) {
+        processStorageLock.lock()
+        defer { processStorageLock.unlock() }
         guard let directoryFD = openDirectory() else {
             reportStorageFailure()
             return
