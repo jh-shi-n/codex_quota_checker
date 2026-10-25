@@ -38,6 +38,7 @@ extension CodexQuotaMonitorAppDelegate {
         DiagnosticLogContext.record(.appTerminating)
         sessionActivityDelivery.stop()
         quotaResetScheduler.stop()
+        automaticResetPing.stop()
         UsageWindowProbeStore.shared.cancelAll()
         AccountTokenUsageStore.shared.invalidateAll()
         serviceStatus.cancel()

@@ -129,6 +129,7 @@ public final class QuotaResetScheduler {
         }
         for entry in reminders {
             guard let current = accounts[entry.account.id], sameIdentity(entry.account, current), !Task.isCancelled else { continue }
+            if entry.window == .primary, current.secondaryRemainingPercent == 0 { continue }
             let currentReset = entry.window == .primary ? current.primaryResetAt : current.secondaryResetAt
             guard let currentReset, abs(currentReset.timeIntervalSince(entry.resetAt)) <= 2 else { continue }
             await notify(QuotaResetAlert(
@@ -154,6 +155,8 @@ public final class QuotaResetScheduler {
             let updated = refreshed[id]
             for entry in due where entry.account.id == id {
                 guard let current = accounts[id], sameIdentity(entry.account, current), !Task.isCancelled else { continue }
+                if entry.window == .primary,
+                   (updated?.secondaryRemainingPercent ?? current.secondaryRemainingPercent) == 0 { continue }
                 let reset = entry.window == .primary ? updated?.primaryResetAt : updated?.secondaryResetAt
                 let detail: String
                 if updated?.status != .normal {

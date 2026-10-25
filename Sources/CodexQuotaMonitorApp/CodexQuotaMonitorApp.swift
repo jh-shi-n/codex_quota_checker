@@ -63,6 +63,24 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             )
         }
     )
+    /// 초기화 확인 이후 선택적 Ping과 재시도·실패 알림 연결
+    lazy var automaticResetPing = AutomaticResetPingCoordinator(
+        refresh: { [weak self] id in
+            guard let self else { return nil }
+            await self.accountStore.refresh(accountID: id, forceFresh: true)
+            return self.accountStore.state(for: id)
+        },
+        probe: { [weak self] account in
+            guard let self else { return AccountDashboardDefaults.unavailableProbe(accountID: account.id, category: .notConfigured) }
+            return await self.runUsageWindowProbe(account)
+        },
+        notify: { [weak self] alert in
+            guard let self else { return }
+            await self.quotaResetNotifications.delivery.notifyAutomaticPingFailure(
+                alert, displayName: self.preferences.displayName(for: alert.accountID)
+            )
+        }
+    )
     let refreshService: RefreshService
     let launchAtLoginService: LaunchAtLoginService
     let sessionActivityProvider: SQLiteSessionActivityProvider
@@ -118,8 +136,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 side: index < 2 ? .left : .right,
                 sessionID: fallback.id,
                 agentLabel: "할당량 리셋 알림",
-                taskName: "\(windows) 조기 초기화",
-                status: .completed
+                taskName: fallback.isFailure ? windows : "\(windows) 조기 초기화",
+                status: fallback.isFailure ? .error : .completed
             ))
         }
         let sessionActivityMonitor = SessionActivityMonitor(
@@ -229,7 +247,11 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
         accountStore.onEarlyQuotaReset = { [weak self] reset in
             guard let self else { return }
-            self.quotaResetNotifications.notify(reset, displayName: self.preferences.displayName(for: reset.accountID))
+            guard let permitted = reset.suppressingUnavailablePrimary(
+                weeklyRemaining: self.accountStore.state(for: reset.accountID)?.secondaryRemainingPercent
+            ) else { return }
+            self.quotaResetNotifications.notify(permitted,
+                displayName: self.preferences.displayName(for: reset.accountID))
         }
 
         activityToastCancellable = sessionActivityToastQueue.$currentLeft
@@ -304,6 +326,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             self?.quotaResetScheduler.reconcile(
                 states: states, reminderMinutes: preferences.resetReminderMinutes
             )
+            self?.automaticResetPing.reconcile(states: states, enabled: preferences.automaticResetPingEnabled)
             self?.render(states: states)
         }
     }

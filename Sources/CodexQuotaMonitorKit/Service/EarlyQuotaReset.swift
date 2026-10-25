@@ -21,6 +21,12 @@ public struct EarlyQuotaReset: Equatable, Sendable {
         }
     }
 
+    /// 주간 소진 중 5시간 초기화 알림만 제외하고 주간 초기화 알림 유지
+    public func suppressingUnavailablePrimary(weeklyRemaining: Double?) -> Self? {
+        let allowed = windows.filter { $0 != .primary || weeklyRemaining != 0 }
+        return allowed.isEmpty ? nil : Self(accountID: accountID, windows: allowed)
+    }
+
     /// 조기 초기화 중 리셋권 사용·사용 여부 불명확한 조회 제외
     public static func detect(
         previous: PreferencesStore.QuotaSnapshot?,

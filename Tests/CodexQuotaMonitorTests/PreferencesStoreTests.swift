@@ -9,12 +9,42 @@ import XCTest
 /// 격리된 설정 도메인과 임시 DB를 이용한 저장 계약 검증
 @MainActor
 final class PreferencesStoreTests: XCTestCase {
+    /// 새 필드가 없는 이전 묶음에서 자동 전송 기본 꺼짐 복원 검증
+    func testLegacyBundleWithoutAutomaticPingKeepsItDisabled() throws {
+        try withFixture { defaults, _, database in
+            defaults.set(try bundleData(), forKey: PreferencesStore.Keys.settingsBundle)
+            let store = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
+            XCTAssertFalse(store.automaticResetPingEnabled)
+            XCTAssertNil(store.persistenceError)
+        }
+    }
+
+    /// 저장 실패 시 자동 전송 선택 복원과 복구 후 영속 저장 검증
+    func testAutomaticPingSettingRollsBackAfterWriteFailure() throws {
+        try withFixture { defaults, root, database in
+            let file = AppConfigurationFile(fileURL: root.appendingPathComponent("config.json"))
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: database)
+            let original = try Data(contentsOf: file.fileURL)
+            try Data("invalid marker".utf8).write(to: file.fileURL)
+            store.updateAutomaticResetPing(true)
+            XCTAssertFalse(store.automaticResetPingEnabled)
+            XCTAssertNotNil(store.persistenceError)
+            try original.write(to: file.fileURL)
+            store.updateAutomaticResetPing(true)
+            XCTAssertTrue(store.automaticResetPingEnabled)
+            XCTAssertNil(store.persistenceError)
+            let restored = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: database)
+            XCTAssertTrue(restored.automaticResetPingEnabled)
+        }
+    }
+
     /// 최초 설정의 기본값과 미등록 상태 복원 검증
     func testMissingValuesRestoreDefaultsFromSettingsBundle() throws {
         try withFixture { defaults, root, database in
             let store = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
             XCTAssertEqual(store.refreshIntervalMinutes, 5)
             XCTAssertEqual(store.resetReminderMinutes, 5)
+            XCTAssertFalse(store.automaticResetPingEnabled)
             XCTAssertEqual(store.accountPaths, ["", "", "", ""])
             XCTAssertEqual(store.enabledAccountIDs, PreferencesStore.defaultEnabledAccountIDs)
             XCTAssertEqual(store.accountDisplayOrder, PreferencesStore.defaultAccountDisplayOrder)
@@ -45,6 +75,7 @@ final class PreferencesStoreTests: XCTestCase {
             store.updateAccountDisplayNames(["C1": " 업무 🌟 ", "C3": "Cafe\u{301}", "C4": "  "])
             store.updateRefreshInterval(minutes: 7)
             store.updateResetReminder(minutes: 3)
+            store.updateAutomaticResetPing(true)
             store.updateActivityNotificationDuration(seconds: 8)
             store.updateShowAccountLabels(true)
             store.updateLaunchAtLogin(true)
@@ -61,6 +92,7 @@ final class PreferencesStoreTests: XCTestCase {
             XCTAssertEqual(restored.displayName(for: "C4"), "C4")
             XCTAssertEqual(restored.refreshIntervalMinutes, 7)
             XCTAssertEqual(restored.resetReminderMinutes, 3)
+            XCTAssertTrue(restored.automaticResetPingEnabled)
             XCTAssertEqual(restored.activityNotificationDurationSeconds, 8)
             XCTAssertTrue(restored.launchAtLogin)
             XCTAssertTrue(restored.showAccountLabels)
@@ -583,7 +615,7 @@ final class PreferencesStoreTests: XCTestCase {
     private var legacySettingKeys: [String] {
         [PreferencesStore.Keys.accountPaths, PreferencesStore.Keys.enabledAccountIDs,
          PreferencesStore.Keys.accountDisplayOrder, PreferencesStore.Keys.accountDisplayNames, PreferencesStore.Keys.refreshIntervalMinutes,
-         PreferencesStore.Keys.resetReminderMinutes, PreferencesStore.Keys.launchAtLogin,
+         PreferencesStore.Keys.resetReminderMinutes, PreferencesStore.Keys.automaticResetPingEnabled, PreferencesStore.Keys.launchAtLogin,
          PreferencesStore.Keys.showAccountLabels, PreferencesStore.Keys.activityNotificationDurationSeconds]
     }
 
