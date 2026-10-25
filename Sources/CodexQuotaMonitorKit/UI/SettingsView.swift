@@ -27,6 +27,7 @@ public struct SettingsView: View {
     public static let refreshSectionTitle = "새로고침"
     public static let activitySectionTitle = "활동 알림"
     public static let quotaResetNotificationSectionTitle = "할당량 초기화 알림"
+    public static let notificationPermissionHelp = "알림 기능이나 자동 전송을 켜거나 권한 요청 버튼을 누르면 알림 권한을 요청합니다. 거부한 권한은 시스템 설정에서 변경할 수 있습니다."
     public static let accountVisibilitySectionTitle = "표시할 계정"
     public static let accountDisplayOrderSectionTitle = "계정 표시 순서"
     public static let activityNotificationDurationLabel = "활동 알림 표시 시간"
@@ -68,7 +69,7 @@ public struct SettingsView: View {
     /// 적용 전까지 계정 설정과 캐시를 변경하지 않는 경로 초안
     public struct AccountPathsDraft {
         public private(set) var paths: [String]
-        private let originalPaths: [String]
+        private var originalPaths: [String]
         public private(set) var validationErrors: [Int: AccountPathValidation] = [:]
 
         /// 현재 설정의 네 계정 경로 복사
@@ -83,6 +84,16 @@ public struct SettingsView: View {
             guard paths.indices.contains(index) else { return }
             paths[index] = text
             validationErrors[index] = nil
+        }
+
+        /// 외부 경로 변경 시 미편집 슬롯만 갱신하고 현재 저장 기준 갱신
+        public mutating func synchronize(paths savedPaths: [String]) {
+            let current = SettingsView.paddedAccountPaths(savedPaths)
+            for index in paths.indices where paths[index] == originalPaths[index] {
+                paths[index] = current[index]
+                validationErrors[index] = nil
+            }
+            originalPaths = current
         }
 
         /// 모든 경로의 검증 성공 시에만 정규화한 일괄 적용값 반환
@@ -125,6 +136,7 @@ public struct SettingsView: View {
     private let onRetryNotificationAuthorization: () -> Void
     private let onSendNotificationTest: () -> Void
     private let onOpenNotificationSettings: () -> Void
+    private let onConnectAccount: () -> Void
 
     /// 목적: 배열형 경로와 설정 바인딩을 사용하는 화면 초기화
     /// 호환성: 새 계정 표시 바인딩은 기본값 제공
@@ -147,7 +159,8 @@ public struct SettingsView: View {
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
         onOpenNotificationSettings: @escaping () -> Void = {},
-        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions())
+        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions()),
+        onConnectAccount: @escaping () -> Void = {}
     ) {
         self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
@@ -165,6 +178,7 @@ public struct SettingsView: View {
         self.onRetryNotificationAuthorization = onRetryNotificationAuthorization
         self.onSendNotificationTest = onSendNotificationTest
         self.onOpenNotificationSettings = onOpenNotificationSettings
+        self.onConnectAccount = onConnectAccount
         self._refreshIntervalDraft = State(initialValue: RefreshIntervalDraft(value: refreshIntervalMinutes.wrappedValue))
         self._accountPathsDraft = State(initialValue: AccountPathsDraft(paths: accountPaths.wrappedValue))
         self._enabledAccountDraft = State(
@@ -200,7 +214,8 @@ public struct SettingsView: View {
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
         onOpenNotificationSettings: @escaping () -> Void = {},
-        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions())
+        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions()),
+        onConnectAccount: @escaping () -> Void = {}
     ) {
         self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
@@ -229,6 +244,7 @@ public struct SettingsView: View {
         self.onRetryNotificationAuthorization = onRetryNotificationAuthorization
         self.onSendNotificationTest = onSendNotificationTest
         self.onOpenNotificationSettings = onOpenNotificationSettings
+        self.onConnectAccount = onConnectAccount
         self._refreshIntervalDraft = State(initialValue: RefreshIntervalDraft(value: refreshIntervalMinutes.wrappedValue))
         self._accountPathsDraft = State(initialValue: AccountPathsDraft(paths: [
             account1Path.wrappedValue,
@@ -276,18 +292,11 @@ public struct SettingsView: View {
                 }
 
                 Section(Self.accountPathSectionTitle) {
+                    Button("계정 연결 가이드", action: onConnectAccount)
                     ForEach(0..<Self.accountPathCount, id: \.self) { index in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text("C\(index + 1)")
-                                    .font(.caption.weight(.semibold))
-                                    .frame(width: 28, alignment: .leading)
-                                TextField("계정 이름 (최대 14자)", text: nameBinding(for: "C\(index + 1)"))
-                                    .textFieldStyle(.roundedBorder)
-                                    .accessibilityLabel("C\(index + 1) 사용자 이름")
-                                    .onSubmit(commitAccountNames)
-                            }
-                            HStack {
+                                Text("C\(index + 1)").font(.caption.weight(.semibold)).frame(width: 28)
                                 TextField("계정 폴더 경로", text: pathBinding(at: index))
                                     .textFieldStyle(.roundedBorder)
                                     .onSubmit(commitAccountPathsDraft)
@@ -303,42 +312,38 @@ public struct SettingsView: View {
                         }
                     }
                     HStack {
-                        Button("이름 적용", action: commitAccountNames)
-                            .disabled(accountNamesDraft == accountDisplayNames)
                         Button("경로 적용", action: commitAccountPathsDraft)
                             .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
-                        Button("편집 취소", action: cancelAccountEdits)
-                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths) && accountNamesDraft == accountDisplayNames)
+                        Button("경로 편집 취소", action: synchronizeAccountPathDrafts)
+                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
                     }
-                    Text("이름은 문자·숫자·공백으로 최대 14자까지 입력할 수 있습니다. 이름 적용 또는 Enter로 저장합니다. 비워두면 슬롯명을 사용합니다. 경로는 적용 또는 Enter로 저장합니다.")
+                    Text("경로는 적용 또는 Enter로 저장합니다. 폴더 선택은 적용 전까지 저장되지 않습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    AccountPathHelpView()
                 }
 
-                Section(Self.accountVisibilitySectionTitle) {
-                    ForEach(PreferencesStore.stableAccountIDs, id: \.self) { accountID in
-                        Toggle(isOn: enabledAccountBinding(for: accountID)) {
-                            HStack(spacing: 8) {
-                                Text(accountID)
-                                if let name = accountDisplayNames[accountID], !name.isEmpty {
-                                    Text(name).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                    Text("선택한 계정은 왼쪽부터 최대 두 개씩 채워집니다. 모두 숨기거나 등록된 계정이 없으면 메뉴 막대 아이콘의 안내에서 설정을 열 수 있습니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section(Self.accountDisplayOrderSectionTitle) {
+                Section("계정 표시·이름·순서") {
                     AccountOrderEditor(
-                        order: Binding(get: { normalizedAccountDisplayOrder }, set: { ids in updateAccountDisplayOrder(ids) }),
-                        names: accountDisplayNames
+                        order: Binding(get: { normalizedAccountDisplayOrder }, set: { updateAccountDisplayOrder($0) }),
+                        names: accountDisplayNames,
+                        enabledAccountIDs: Binding(get: { enabledAccountDraft }, set: { ids in
+                            enabledAccountDraft = Self.applyDisplayChange(ids, binding: $enabledAccountIDs)
+                        }),
+                        nameDrafts: $accountNamesDraft,
+                        onCommitNames: commitAccountNames
                     )
-                    Text("오른쪽 손잡이나 행을 드래그해 원하는 위치에 놓으세요.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        Button("이름 적용", action: commitAccountNames)
+                            .accessibilityIdentifier("apply-account-names")
+                            .disabled(accountNamesDraft == accountDisplayNames)
+                        Button("이름 편집 취소") { accountNamesDraft = accountDisplayNames }
+                            .disabled(accountNamesDraft == accountDisplayNames)
+                    }
+                    Text("체크한 계정은 왼쪽부터 최대 두 개씩 표시됩니다. 순서는 손잡이를 드래그해 변경합니다. 모두 숨겨도 메뉴 막대에서 설정을 열 수 있습니다.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("이름은 문자·숫자·공백으로 최대 14자까지 입력할 수 있습니다. 이름 적용 또는 Enter로 저장하며 비워두면 슬롯명을 사용합니다.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 TokenUsageSettingsSection(options: $tokenUsageOptions)
@@ -391,7 +396,7 @@ public struct SettingsView: View {
                         Button("알림 설정 열기", action: onOpenNotificationSettings)
                             .disabled(notificationControlsUnavailable)
                     }
-                    Text("권한 요청은 버튼을 눌렀을 때만 진행됩니다. 권한을 거부한 경우 시스템 설정에서 변경할 수 있습니다.")
+                    Text(Self.notificationPermissionHelp)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -446,15 +451,22 @@ public struct SettingsView: View {
             synchronizeAccountPathDrafts()
             synchronizeAccountDisplayDrafts()
         }
-        .onChange(of: accountDisplayNames) { _, names in accountNamesDraft = names }
-        .onChange(of: accountPaths) { _, _ in synchronizeAccountPathDrafts() }
+        .onChange(of: refreshIntervalMinutes) { previous, current in
+            if refreshIntervalDraft.text == String(previous) {
+                refreshIntervalDraft = RefreshIntervalDraft(value: current)
+            }
+        }
+        .onChange(of: accountDisplayNames) { previous, names in
+            accountNamesDraft = Self.mergingNameDrafts(accountNamesDraft, previous: previous, current: names)
+        }
+        .onChange(of: accountPaths) { _, paths in accountPathsDraft.synchronize(paths: paths) }
         .onChange(of: enabledAccountIDs) { _, _ in synchronizeAccountDisplayDrafts() }
         .onChange(of: accountDisplayOrder) { _, _ in synchronizeAccountDisplayDrafts() }
     }
 
     /// 설치 앱의 번들 버전 표시 및 소스 미리보기의 현재 릴리스 기본값
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.7"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.9"
     }
 
     private var refreshIntervalBinding: Binding<Int> {
@@ -463,7 +475,7 @@ public struct SettingsView: View {
             set: { value in
                 let normalized = RefreshService.normalizedIntervalMinutes(value)
                 refreshIntervalMinutes = normalized
-                refreshIntervalDraft = RefreshIntervalDraft(value: normalized)
+                refreshIntervalDraft = RefreshIntervalDraft(value: refreshIntervalMinutes)
             }
         )
     }
@@ -522,14 +534,6 @@ public struct SettingsView: View {
         }
     }
 
-    /// 한글 조합과 공백 입력을 보존하는 계정 이름 편집 초안
-    private func nameBinding(for accountID: String) -> Binding<String> {
-        Binding(
-            get: { accountNamesDraft[accountID] ?? "" },
-            set: { accountNamesDraft[accountID] = $0 }
-        )
-    }
-
     /// 입력 완료 시 이름 제한 적용 및 내부 슬롯과 분리한 일괄 저장
     private func commitAccountNames() {
         accountDisplayNames = accountNamesDraft.reduce(into: [:]) { names, entry in
@@ -539,21 +543,13 @@ public struct SettingsView: View {
         accountNamesDraft = accountDisplayNames
     }
 
-    /// 목적: 표시 계정 ID별 활성 상태 바인딩 제공
-    private func enabledAccountBinding(for accountID: String) -> Binding<Bool> {
-        Binding(
-            get: { enabledAccountDraft.contains(accountID) },
-            set: { isEnabled in
-                var ids = Self.normalizedEnabledAccountIDs(enabledAccountDraft)
-                if isEnabled {
-                    if !ids.contains(accountID) { ids.append(accountID) }
-                } else {
-                    ids.removeAll { $0 == accountID }
-                }
-                let normalized = Self.normalizedEnabledAccountIDs(ids)
-                enabledAccountDraft = Self.applyDisplayChange(normalized, binding: $enabledAccountIDs)
-            }
-        )
+    /// 외부 이름 변경 시 미편집 슬롯만 동기화하여 입력 중 초안 보존
+    static func mergingNameDrafts(_ drafts: [String: String], previous: [String: String], current: [String: String]) -> [String: String] {
+        var result = drafts
+        for id in PreferencesStore.stableAccountIDs where (drafts[id] ?? "") == (previous[id] ?? "") {
+            result[id] = current[id]
+        }
+        return result
     }
 
     /// 목적: 표시 순서를 표준 계정 ID의 완전한 순열로 제공
@@ -621,6 +617,7 @@ public struct SettingsView: View {
             return
         }
         refreshIntervalMinutes = value
+        refreshIntervalDraft = RefreshIntervalDraft(value: refreshIntervalMinutes)
     }
 
     /// 적용 전까지 초안만 갱신하는 계정 경로 바인딩
@@ -642,12 +639,6 @@ public struct SettingsView: View {
         guard let paths = accountPathsDraft.commit(validator: accountPathValidator),
               paths != Self.paddedAccountPaths(accountPaths) else { return }
         accountPaths = paths
-    }
-
-    /// 저장 전 이름·경로 편집 내용을 함께 취소
-    private func cancelAccountEdits() {
-        synchronizeAccountPathDrafts()
-        accountNamesDraft = accountDisplayNames
     }
 
     /// 외부 경로 변경 또는 편집 취소 시 저장된 경로로 초안 복원

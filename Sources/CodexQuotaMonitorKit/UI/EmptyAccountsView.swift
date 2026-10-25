@@ -19,7 +19,7 @@ public struct EmptyAccountsPresentation: Equatable, Sendable {
     }
 
     public var detail: String {
-        hasRegisteredAccounts ? "설정에서 표시할 계정을 활성화해 주세요." : "설정에서 계정을 등록해 주세요."
+        hasRegisteredAccounts ? "설정에서 표시할 계정을 활성화해 주세요." : "계정 연결을 눌러 사용할 계정을 등록해 주세요."
     }
 }
 
@@ -28,11 +28,17 @@ public struct EmptyAccountsView: View {
     public static let contentSize = CGSize(width: 340, height: 260)
     public let presentation: EmptyAccountsPresentation
     private let onOpenSettings: () -> Void
+    private let onConnectAccount: () -> Void
 
     /// 현재 등록 상태와 설정 이동 동작 연결
-    public init(hasRegisteredAccounts: Bool, onOpenSettings: @escaping () -> Void) {
+    public init(
+        hasRegisteredAccounts: Bool,
+        onConnectAccount: (() -> Void)? = nil,
+        onOpenSettings: @escaping () -> Void
+    ) {
         self.presentation = EmptyAccountsPresentation(hasRegisteredAccounts: hasRegisteredAccounts)
         self.onOpenSettings = onOpenSettings
+        self.onConnectAccount = onConnectAccount ?? onOpenSettings
     }
 
     public var body: some View {
@@ -49,9 +55,15 @@ public struct EmptyAccountsView: View {
             Text(presentation.detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Button("설정 열기", action: onOpenSettings)
-                .buttonStyle(.appPrimary)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            HStack {
+                Spacer()
+                Button("설정 열기", action: onOpenSettings)
+                    .buttonStyle(.appAction)
+                if !presentation.hasRegisteredAccounts {
+                    Button("계정 연결", action: onConnectAccount)
+                        .buttonStyle(.appPrimary)
+                }
+            }
         }
         .padding(20)
         .frame(width: Self.contentSize.width)

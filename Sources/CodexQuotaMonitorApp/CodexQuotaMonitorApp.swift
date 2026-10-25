@@ -531,7 +531,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 등록 상태별 설명과 설정 버튼의 공통 구성
     private func makeEmptyAccountsView() -> EmptyAccountsView {
-        EmptyAccountsView(hasRegisteredAccounts: preferences.hasRegisteredAccounts) { [weak self] in
+        EmptyAccountsView(hasRegisteredAccounts: preferences.hasRegisteredAccounts, onConnectAccount: { [weak self] in
+            self?.emptyAccountsPopover?.performClose(nil)
+            self?.openAccountSetup()
+        }) { [weak self] in
             self?.emptyAccountsPopover?.performClose(nil)
             self?.openSettings()
         }

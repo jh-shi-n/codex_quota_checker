@@ -37,6 +37,11 @@ final class QuotaResetNotificationService: NSObject, UNUserNotificationCenterDel
         Task { await delivery.start() }
     }
 
+    /// 설정 표시·앱 복귀 시 권한 요청 없는 현재 상태 조회
+    func refreshAuthorization() {
+        Task { await delivery.refreshAuthorization() }
+    }
+
     /// 설정 화면의 사용자 동작에 따른 권한 요청·재확인
     func retryAuthorization() {
         Task { await delivery.requestAuthorization() }

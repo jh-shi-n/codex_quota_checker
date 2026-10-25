@@ -1,39 +1,53 @@
-// 목적: 네 계정의 표시 순서 편집
-// 이용처: 설정 화면의 독립 계정 순서 영역
-// 사용방법·실행 예시: AccountOrderEditor(order: $order, names: names)
+// 목적: 슬롯별 표시 여부·이름 초안·순서의 통합 편집
+// 이용처: 설정의 단일 계정 목록과 기존 순서 전용 호스트
+// 사용방법: 표시·이름 바인딩 전달 시 편집 행, 생략 시 순서 전용 행 구성
+// 실행 예시: AccountOrderEditor(order: $order, names: names)
 import SwiftUI
 
-/// 드롭 확정 시에만 순서를 반영하는 계정 편집기
+/// 슬롯 ID를 보존하며 드롭 확정 시에만 순서를 반영하는 계정 편집기
 @MainActor
 public struct AccountOrderEditor: View {
     @Binding private var order: [String]
     private let names: [String: String]
+    private let enabledAccountIDs: Binding<[String]>?
+    private let nameDrafts: Binding<[String: String]>?
+    private let onCommitNames: () -> Void
     @State private var draggedSlot: String?
     @State private var insertion: Int?
     @GestureState private var isDragging = false
+    @Namespace private var coordinateSpace
     private static let slots = ["C1", "C2", "C3", "C4"]
 
-    /// 호출자 소유 순서 바인딩과 선택적 이름 연결
-    public init(order: Binding<[String]>, names: [String: String] = [:]) {
+    /// 기존 순서 편집과 통합 목록의 선택적 표시·이름 바인딩 연결
+    public init(order: Binding<[String]>, names: [String: String] = [:],
+                enabledAccountIDs: Binding<[String]>? = nil,
+                nameDrafts: Binding<[String: String]>? = nil,
+                onCommitNames: @escaping () -> Void = {}) {
         _order = order
         self.names = names
+        self.enabledAccountIDs = enabledAccountIDs
+        self.nameDrafts = nameDrafts
+        self.onCommitNames = onCommitNames
     }
 
+    /// 누락 슬롯을 보완한 안정적인 계정 표시 순서 제공
     private var displayedOrder: [String] {
         (order + Self.slots).reduce(into: []) { result, slot in
             if Self.slots.contains(slot), !result.contains(slot) { result.append(slot) }
         }
     }
 
+    /// 계정 행과 목록 기준 드래그 좌표계 구성
     public var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(displayedOrder.enumerated()), id: \.element) { index, slot in
                 GeometryReader { geometry in
                     row(slot, index: index, width: geometry.size.width)
                 }
-                .frame(height: 32)
+                .frame(height: 36)
             }
         }
+        .coordinateSpace(name: coordinateSpace)
         .onDisappear { draggedSlot = nil; insertion = nil }
         .onChange(of: isDragging) { _, active in
             if !active { draggedSlot = nil; insertion = nil }
@@ -41,7 +55,6 @@ public struct AccountOrderEditor: View {
     }
 
     /// 원본 배열의 삽입 경계를 제거 후 인덱스로 보정하는 순수 이동 함수
-    /// 범위: insertionIndex는 0...order.count, 무효 입력은 원본 반환
     nonisolated public static func moving(
         _ order: [String], slotID: String, toInsertionIndex insertionIndex: Int
     ) -> [String] {
@@ -53,55 +66,95 @@ public struct AccountOrderEditor: View {
         return result
     }
 
-    /// 행 전체와 우측 손잡이를 공통 드래그 영역으로 구성
+    /// 이름 입력·체크 조작과 행 드래그의 충돌 방지
+    @ViewBuilder
     private func row(_ slot: String, index: Int, width: CGFloat) -> some View {
+        if nameDrafts != nil {
+            rowContent(slot, index: index, width: width)
+        } else {
+            rowContent(slot, index: index, width: width)
+                .gesture(dragGesture(slot, width: width))
+        }
+    }
+
+    /// 표시 체크·슬롯명·이름 입력과 별도 순서 손잡이 구성
+    private func rowContent(_ slot: String, index: Int, width: CGFloat) -> some View {
         let name = AccountDisplayName.resolved(names[slot] ?? "", slotID: slot)
         return HStack(spacing: 8) {
+            if let enabledAccountIDs {
+                Toggle("\(slot) 표시", isOn: Binding(
+                    get: { enabledAccountIDs.wrappedValue.contains(slot) },
+                    set: { enabled in
+                        var ids = enabledAccountIDs.wrappedValue.filter { $0 != slot }
+                        if enabled { ids.append(slot) }
+                        enabledAccountIDs.wrappedValue = ids
+                    }
+                ))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .accessibilityLabel("\(slot) 표시")
+                .accessibilityIdentifier("account-visible-\(slot)")
+            }
             Text(slot).monospaced().fontWeight(.medium)
-            if name != slot { Text(name).foregroundStyle(.secondary).lineLimit(1) }
-            Spacer(minLength: 8)
+            if let nameDrafts {
+                TextField("계정 이름 (최대 14자)", text: Binding(
+                    get: { nameDrafts.wrappedValue[slot] ?? "" },
+                    set: { nameDrafts.wrappedValue[slot] = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(onCommitNames)
+                .accessibilityLabel("\(slot) 사용자 이름")
+                .accessibilityIdentifier("account-name-\(slot)")
+            } else {
+                if name != slot { Text(name).foregroundStyle(.secondary).lineLimit(1) }
+                Spacer(minLength: 8)
+            }
             Image(systemName: "line.3.horizontal")
                 .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
+                .frame(width: 26, height: 32)
+                .contentShape(Rectangle())
+                .gesture(dragGesture(slot, width: width))
+                .accessibilityLabel("\(slot) 순서")
+                .accessibilityValue("\(index + 1) / 4")
+                .accessibilityAction(named: Text("위로 이동")) { move(slot, offset: -1) }
+                .accessibilityAction(named: Text("아래로 이동")) { move(slot, offset: 1) }
+                .help("손잡이를 드래그하여 계정 순서 변경")
         }
         .padding(.horizontal, 8)
-        .frame(height: 32)
+        .frame(height: 36)
         .contentShape(Rectangle())
         .overlay(alignment: .top) {
             if insertion == index { Rectangle().fill(Color.accentColor).frame(height: 2) }
         }
         .overlay(alignment: .bottom) {
-            if index == 3, insertion == 4 {
-                Rectangle().fill(Color.accentColor).frame(height: 2)
-            }
+            if index == 3, insertion == 4 { Rectangle().fill(Color.accentColor).frame(height: 2) }
         }
         .opacity(draggedSlot == slot ? 0.55 : 1)
-        .help("행이나 오른쪽 손잡이를 드래그하여 계정 순서 변경")
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: nameDrafts == nil ? .ignore : .contain)
         .accessibilityLabel(name == slot ? slot : "\(slot), \(name)")
         .accessibilityValue("\(index + 1) / 4")
         .accessibilityAction(named: Text("위로 이동")) { move(slot, offset: -1) }
         .accessibilityAction(named: Text("아래로 이동")) { move(slot, offset: 1) }
-        .gesture(
-            DragGesture(minimumDistance: 4)
-                .updating($isDragging) { _, active, _ in active = true }
-                .onChanged { value in
-                    draggedSlot = slot
-                    let y = CGFloat(index * 32) + value.location.y
-                    insertion = min(displayedOrder.count, max(0, Int((y / 32).rounded())))
+    }
+
+    /// 목록 좌표로 삽입 위치 계산 및 목록 밖 드롭의 변경 취소
+    private func dragGesture(_ slot: String, width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named(coordinateSpace))
+            .updating($isDragging) { _, active, _ in active = true }
+            .onChanged { value in
+                draggedSlot = slot
+                insertion = min(displayedOrder.count, max(0, Int((value.location.y / 36).rounded())))
+            }
+            .onEnded { value in
+                let y = value.location.y
+                if value.location.x >= 0, value.location.x <= width,
+                   y >= 0, y <= CGFloat(displayedOrder.count * 36),
+                   draggedSlot == slot, let insertion {
+                    order = Self.moving(displayedOrder, slotID: slot, toInsertionIndex: insertion)
                 }
-                .onEnded { value in
-                    let y = CGFloat(index * 32) + value.location.y
-                    if value.location.x >= 0, value.location.x <= width,
-                       y >= 0, y <= CGFloat(displayedOrder.count * 32),
-                       draggedSlot == slot, let insertion {
-                        let current = displayedOrder
-                        order = Self.moving(current, slotID: slot, toInsertionIndex: insertion)
-                    }
-                    draggedSlot = nil
-                    insertion = nil
-                }
-        )
+                draggedSlot = nil
+                insertion = nil
+            }
     }
 
     /// 접근성 이동 요청의 경계 검사와 즉시 반영
@@ -113,5 +166,4 @@ public struct AccountOrderEditor: View {
         insertion = nil
         order = Self.moving(current, slotID: slot, toInsertionIndex: index + (offset > 0 ? 2 : -1))
     }
-
 }

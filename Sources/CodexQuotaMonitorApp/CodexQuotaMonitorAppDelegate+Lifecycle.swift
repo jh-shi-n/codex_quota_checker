@@ -28,6 +28,7 @@ extension CodexQuotaMonitorAppDelegate {
             }
         }
         synchronizeLaunchAtLoginStatus()
+        quotaResetNotifications.refreshAuthorization()
     }
 
     /// 시스템 설정에서 앱으로 복귀할 때 자동실행 승인 상태 재확인

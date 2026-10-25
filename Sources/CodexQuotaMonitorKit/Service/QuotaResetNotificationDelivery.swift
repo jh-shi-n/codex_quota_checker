@@ -84,7 +84,9 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
     public static let unavailable = QuotaResetNotificationDelivery(backend: nil)
 
     @Published public private(set) var status: QuotaResetNotificationStatus
+    public private(set) var isRequestingAuthorization = false
 
+    private var authorizationRevision = 0
     private let backend: (any QuotaResetNotificationBackend)?
     private let onFallback: @MainActor @Sendable (QuotaResetNotificationFallback) -> Void
     private let onDiagnostic: @MainActor @Sendable (String) -> Void
@@ -110,19 +112,24 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
 
     /// 현재 권한 상태 재조회
     public func refreshAuthorization() async {
+        guard !isRequestingAuthorization else { return }
         guard let backend else {
             updateAuthorization(.unavailable, error: nil)
             return
         }
 
+        authorizationRevision += 1
+        let revision = authorizationRevision
         let previousError = status.authorizationError
         updateAuthorization(.checking, error: previousError)
         do {
             let authorization = try await backend.authorizationStatus()
+            guard revision == authorizationRevision else { return }
             let recovered = [.authorized, .provisional, .ephemeral].contains(authorization)
             updateAuthorization(authorization, error: recovered ? nil : previousError)
             onDiagnostic("authorization_status_read")
         } catch {
+            guard revision == authorizationRevision else { return }
             updateAuthorization(.error, error: error.localizedDescription)
             onDiagnostic("authorization_status_failed")
         }
@@ -130,6 +137,10 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
 
     /// 사용자 요청에 따라 권한 요청 후 최신 권한 상태 재조회
     public func requestAuthorization() async {
+        guard !isRequestingAuthorization else { return }
+        authorizationRevision += 1
+        isRequestingAuthorization = true
+        defer { isRequestingAuthorization = false }
         guard let backend else {
             updateAuthorization(.unavailable, error: nil)
             return

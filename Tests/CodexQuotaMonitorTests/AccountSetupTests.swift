@@ -1,4 +1,5 @@
 // 목적: 초기 연결의 검증·취소·등록 조건과 빈 계정 처리 검증
+import AppKit
 import Foundation
 import SwiftUI
 import XCTest
@@ -6,6 +7,109 @@ import XCTest
 
 @MainActor
 final class AccountSetupTests: XCTestCase {
+    /// 기본 폴더의 실제 연결 확인 이후에만 사용자 등록 허용 검증
+    func testDefaultAccountDiscoveryVerifiesIdentityWithoutRegistering() async {
+        let model = AccountSetupModel(validator: validValidator(), checker: { config in
+            XCTAssertEqual(config.home.path, "/fixture/.codex")
+            return AccountState(id: config.id, email: "demo@example.com", status: .normal)
+        })
+        await model.discoverDefaultAccount()
+        XCTAssertEqual(model.path, "/fixture/.codex")
+        XCTAssertEqual(model.connectedAccount?.email, "demo@example.com")
+        XCTAssertTrue(model.canFinish)
+        XCTAssertFalse(model.isRegistering)
+        XCTAssertNotNil(model.discoveryMessage)
+    }
+
+    /// 기본 폴더 미발견 시 네트워크 조회 없이 경로 안내 제공 검증
+    func testMissingDefaultDirectoryOffersHelpWithoutRequestingQuota() async {
+        let validator = AccountPathValidator(homeDirectory: URL(fileURLWithPath: "/fixture"), fileSystem: .init { _ in
+            AccountPathFileMetadata(exists: false, isDirectory: false, isReadable: false)
+        })
+        let model = AccountSetupModel(validator: validator, checker: { config in
+            XCTFail("기본 폴더 미발견 시 연결 요청 금지")
+            return AccountState(id: config.id, status: .normal)
+        })
+        await model.discoverDefaultAccount()
+        XCTAssertEqual(model.path, "")
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertNotNil(model.discoveryMessage)
+        XCTAssertFalse(model.canFinish)
+    }
+
+    /// 자동 탐색 실패 이후 입력한 CLI 경로의 연결 확인·등록 전환 검증
+    func testDiscoveryFailureCanBeRecoveredWithPastedCLIPath() async {
+        let model = AccountSetupModel(validator: validValidator(), checker: { config in
+            AccountState(id: config.id, status: config.home.lastPathComponent == ".codex" ? .loginRequired : .normal)
+        })
+        await model.discoverDefaultAccount()
+        XCTAssertEqual(model.phase, .failed)
+        model.path = "/fixture/.codex-work"
+        await model.checkConnection()
+        XCTAssertEqual(model.registrationPath(), "/fixture/.codex-work")
+        await model.discoverDefaultAccount()
+        XCTAssertEqual(model.path, "/fixture/.codex-work")
+    }
+
+    /// 사용자 입력을 자동 탐색이 덮어쓰거나 조회하지 않는 조건 검증
+    func testManualInputTakesPrecedenceOverDefaultDiscovery() async {
+        let model = AccountSetupModel(validator: validValidator(), checker: { config in
+            XCTFail("사용자 입력 이후 자동 조회 금지")
+            return AccountState(id: config.id, status: .normal)
+        })
+        model.path = "/fixture/custom"
+        await model.discoverDefaultAccount()
+        XCTAssertEqual(model.path, "/fixture/custom")
+        XCTAssertEqual(model.phase, .idle)
+    }
+
+    /// 자동 조회 중 경로 변경 이후 늦은 응답의 계정·성공 안내 복원 방지 검증
+    func testDefaultDiscoveryDoesNotRestoreCancelledResult() async {
+        let gate = SetupCheckGate()
+        let model = AccountSetupModel(validator: validValidator(), checker: { config in
+            await gate.wait()
+            return AccountState(id: config.id, status: .normal)
+        })
+        let discovery = Task { await model.discoverDefaultAccount() }
+        await gate.waitUntilStarted()
+        model.path = "/fixture/manual"
+        await gate.release()
+        await discovery.value
+        XCTAssertEqual(model.path, "/fixture/manual")
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertNil(model.connectedAccount)
+        XCTAssertNotEqual(model.discoveryMessage, "기본 계정을 찾았습니다. 연결할 계정을 확인한 뒤 ‘이 계정 연결’을 눌러 주세요.")
+    }
+
+    /// 저장·화면 반영 대기 중 중복 등록 차단과 저장 실패 이후 재시도 검증
+    func testRegistrationBlocksDuplicateSubmissionAndAllowsRetryAfterFailure() async {
+        let model = AccountSetupModel(validator: validValidator(), checker: { config in
+            AccountState(id: config.id, status: .normal)
+        })
+        model.path = "/fixture/account"
+        await model.checkConnection()
+        XCTAssertNotNil(model.beginRegistration())
+        XCTAssertTrue(model.isRegistering)
+        XCTAssertNil(model.beginRegistration())
+        XCTAssertFalse(model.canCheck)
+        model.reportRegistrationFailure("저장 실패")
+        XCTAssertTrue(model.canFinish)
+        XCTAssertNotNil(model.beginRegistration())
+    }
+
+    /// 설정 수정 금지 영어 요청의 실제 클립보드 복사 검증
+    func testEnglishPathPromptCopiesWithoutRequestingSettingsChanges() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        XCTAssertTrue(AccountPathHelp.copyPrompt(to: pasteboard))
+        let prompt = pasteboard.string(forType: .string)
+        XCTAssertEqual(prompt, AccountPathHelp.prompt)
+        XCTAssertTrue(AccountPathHelp.prompt.unicodeScalars.allSatisfy(\.isASCII))
+        XCTAssertTrue(AccountPathHelp.prompt.contains("CODEX_HOME"))
+        XCTAssertTrue(AccountPathHelp.prompt.contains("not the current working directory"))
+        XCTAssertTrue(AccountPathHelp.prompt.contains("Do not modify any files or application settings."))
+    }
+
     /// 호스트 크기 제안 없이도 안내 본문의 최소 크기 유지 검증
     func testSetupViewPreservesMinimumSize() throws {
         let renderer = ImageRenderer(content: AccountSetupView(

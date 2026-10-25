@@ -173,6 +173,56 @@ final class QuotaResetNotificationDeliveryTests: XCTestCase {
         XCTAssertEqual(delivery.status.authorizationError, "모의 권한 조회 오류")
     }
 
+    /// 동시 활성화·권한 버튼 조작에서 진행 중인 권한 요청의 중복 방지 검증
+    func testConcurrentAuthorizationRequestsAreCoalesced() async throws {
+        let backend = StubNotificationBackend(status: .notRequested)
+        var continuation: CheckedContinuation<Void, Never>?
+        backend.waitForRequest = { await withCheckedContinuation { continuation = $0 } }
+        backend.statusAfterRequest = .authorized
+        let delivery = QuotaResetNotificationDelivery(backend: backend)
+        let first = Task { await delivery.requestAuthorization() }
+        for _ in 0..<100 {
+            if continuation != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let pending = try XCTUnwrap(continuation)
+        XCTAssertTrue(delivery.isRequestingAuthorization)
+        await delivery.requestAuthorization()
+        await delivery.refreshAuthorization()
+        XCTAssertEqual(backend.requestCount, 1)
+        XCTAssertEqual(delivery.status.authorization, .checking)
+        pending.resume()
+        await first.value
+        XCTAssertFalse(delivery.isRequestingAuthorization)
+        XCTAssertEqual(delivery.status.authorization, .authorized)
+        backend.status = .denied
+        await delivery.refreshAuthorization()
+        XCTAssertEqual(delivery.status.authorization, .denied)
+        XCTAssertEqual(backend.requestCount, 1)
+    }
+
+    /// 늦게 완료된 과거 권한 조회가 새 권한 요청 결과를 덮어쓰지 않는지 검증
+    func testStaleAuthorizationReadCannotOverwriteNewRequestResult() async throws {
+        let backend = StubNotificationBackend(status: .notRequested)
+        var continuation: CheckedContinuation<Void, Never>?
+        backend.waitForRead = { await withCheckedContinuation { continuation = $0 } }
+        let delivery = QuotaResetNotificationDelivery(backend: backend)
+        let oldRead = Task { await delivery.refreshAuthorization() }
+        for _ in 0..<100 {
+            if continuation != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let pending = try XCTUnwrap(continuation)
+        backend.waitForRead = nil
+        backend.statusAfterRequest = .authorized
+        await delivery.requestAuthorization()
+        XCTAssertEqual(delivery.status.authorization, .authorized)
+        pending.resume()
+        await oldRead.value
+        XCTAssertEqual(delivery.status.authorization, .authorized)
+        XCTAssertEqual(backend.requestCount, 1)
+    }
+
     /// 조기 리셋 입력 구성
     private func makeReset() -> EarlyQuotaReset {
         EarlyQuotaReset(accountID: "C3", windows: [.primary, .secondary])
@@ -208,6 +258,8 @@ private final class StubNotificationBackend: QuotaResetNotificationBackend {
     var authorizationError: Error?
     var requestError: Error?
     var deliveryError: Error?
+    var waitForRead: (() async -> Void)?
+    var waitForRequest: (() async -> Void)?
     var requestCount = 0
     var delivered: [(title: String, body: String)] = []
 
@@ -218,13 +270,16 @@ private final class StubNotificationBackend: QuotaResetNotificationBackend {
 
     /// 모의 현재 권한 상태 반환
     func authorizationStatus() async throws -> QuotaResetNotificationAuthorization {
+        let value = status
+        await waitForRead?()
         if let authorizationError { throw authorizationError }
-        return status
+        return value
     }
 
     /// 모의 권한 요청과 요청 후 상태 변경
     func requestAuthorization() async throws {
         requestCount += 1
+        await waitForRequest?()
         if let requestError { throw requestError }
         if let statusAfterRequest { status = statusAfterRequest }
     }

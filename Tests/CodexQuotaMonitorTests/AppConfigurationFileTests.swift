@@ -392,7 +392,8 @@ final class AppConfigurationFileTests: XCTestCase {
             let recovered = PreferencesStore(userDefaults: defaults, configurationFile: file)
             XCTAssertTrue(recovered.hasRegisteredAccount)
             XCTAssertEqual(recovered.firstAccountRegisteredAt, date)
-            XCTAssertFalse(recovered.requiresAccountSetup)
+            XCTAssertTrue(recovered.requiresAccountSetup)
+            XCTAssertTrue(recovered.needsAccountRecovery)
             XCTAssertEqual(try file.read()?.installation?.firstAccountRegisteredAt, date)
             let restored = PreferencesStore(userDefaults: defaults)
             XCTAssertTrue(restored.hasRegisteredAccount)
@@ -427,7 +428,8 @@ final class AppConfigurationFileTests: XCTestCase {
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file.fileURL)) as? [String: Any])
             XCTAssertEqual(Set(object.keys), ["hasRegisteredAccount", "firstAccountRegisteredAt"])
             XCTAssertEqual(object["firstAccountRegisteredAt"] as? String, "2026-01-01T01:00:00.000000000Z")
-            XCTAssertFalse(store.requiresAccountSetup)
+            XCTAssertTrue(store.requiresAccountSetup)
+            XCTAssertTrue(store.needsAccountRecovery)
         }
     }
 
