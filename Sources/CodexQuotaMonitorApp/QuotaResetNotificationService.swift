@@ -72,21 +72,26 @@ private final class UNQuotaResetNotificationBackend: QuotaResetNotificationBacke
         self.center = center
     }
 
-    /// 최신 시스템 권한 상태 조회
+    /// SDK의 Sendable 지원과 무관하게 권한 값만 액터 경계로 전달
     func authorizationStatus() async throws -> QuotaResetNotificationAuthorization {
-        switch await center.notificationSettings().authorizationStatus {
-        case .notDetermined:
-            .notRequested
-        case .denied:
-            .denied
-        case .authorized:
-            .authorized
-        case .provisional:
-            .provisional
-        case .ephemeral:
-            .ephemeral
-        @unknown default:
-            .unknown
+        await withCheckedContinuation { continuation in
+            center.getNotificationSettings { settings in
+                let authorization: QuotaResetNotificationAuthorization = switch settings.authorizationStatus {
+                case .notDetermined:
+                    .notRequested
+                case .denied:
+                    .denied
+                case .authorized:
+                    .authorized
+                case .provisional:
+                    .provisional
+                case .ephemeral:
+                    .ephemeral
+                @unknown default:
+                    .unknown
+                }
+                continuation.resume(returning: authorization)
+            }
         }
     }
 

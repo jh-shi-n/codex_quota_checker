@@ -1,0 +1,64 @@
+# 목적: 지원 macOS의 빌드·테스트·앱 패키징 호환성 검증
+# 이용처: PR과 main 변경의 SDK별 회귀 검사
+# 사용방법: GitHub Actions 자동 실행 또는 workflow_dispatch 수동 실행
+name: macOS compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: ${{ matrix.os }} / Xcode ${{ matrix.xcode }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            xcode: '16.2'
+          - os: macos-15
+            xcode: '16.3'
+          - os: macos-26
+            xcode: '26.5'
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Report OS, toolchain and SDK
+        run: |
+          sw_vers
+          swift --version
+          xcrun --show-sdk-version
+      - name: Run tests
+        run: swift test
+      - name: Package and verify release app
+        run: |
+          scripts/package_app.sh --output "$RUNNER_TEMP/CodexQuotaChecker.app"
+          codesign --verify --deep --strict "$RUNNER_TEMP/CodexQuotaChecker.app"
+          test "$(plutil -extract LSMinimumSystemVersion raw "$RUNNER_TEMP/CodexQuotaChecker.app/Contents/Info.plist")" = '14.0'
+          xcrun vtool -show-build "$RUNNER_TEMP/CodexQuotaChecker.app/Contents/MacOS/CodexQuotaMonitor"
+      - name: Verify app startup
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          import time
+
+          executable = os.path.join(os.environ['RUNNER_TEMP'], 'CodexQuotaChecker.app/Contents/MacOS/CodexQuotaMonitor')
+          process = subprocess.Popen([executable], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+          try:
+              time.sleep(5)
+              if process.poll() is not None:
+                  raise SystemExit(f'App exited during startup ({process.returncode}): {process.stderr.read().decode(errors="replace")}')
+          finally:
+              if process.poll() is None:
+                  process.terminate()
+                  process.wait(timeout=10)
+          PY
