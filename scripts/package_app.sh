@@ -1,4 +1,8 @@
 #!/bin/zsh
+# 목적: 빌드 진행 표시와 서명된 macOS 앱 패키징·교체
+# 이용처: 로컬 설치 및 릴리스 배포본 생성
+# 사용방법: --output으로 앱 번들 또는 출력 폴더 지정
+# 실행 예시: ./scripts/package_app.sh --output /Applications/CodexQuotaChecker.app
 set -euo pipefail
 
 script_dir="${0:A:h}"
@@ -9,7 +13,9 @@ stage_dir=""
 stage_owned=0
 backup_app=""
 backup_owned=0
+spinner_pid=""
 
+# 패키징 인수와 기본 사용법 출력
 usage() {
     print "Usage: $0 --output DESTINATION [--configuration release|debug]"
 }
@@ -71,18 +77,16 @@ if [[ -e "$target_app" ]]; then
     fi
 fi
 
-(cd "$package_root" && swift build -c "$configuration" --product CodexQuotaMonitor)
-build_bin_path="$(cd "$package_root" && swift build -c "$configuration" --show-bin-path)"
-binary="$build_bin_path/CodexQuotaMonitor"
-info_plist="$package_root/resource/Info.plist"
-app_icon="$package_root/resource/AppIcon.icns"
-[[ -x "$binary" ]] || { print -u2 "Built executable not found: $binary"; exit 1; }
-[[ -f "$info_plist" ]] || { print -u2 "Info.plist not found: $info_plist"; exit 1; }
-[[ -f "$app_icon" ]] || { print -u2 "App icon not found: $app_icon"; exit 1; }
+# 스피너 종료와 터미널의 진행 표시 줄 정리
+stop_build_progress() {
+    [[ -n "$spinner_pid" ]] || return 0
+    kill "$spinner_pid" 2>/dev/null || true
+    wait "$spinner_pid" 2>/dev/null || true
+    spinner_pid=""
+    printf '\r\033[2K' >&2
+}
 
-stage_dir="$(mktemp -d "$destination_dir/.CodexQuotaChecker.stage.XXXXXX")"
-stage_owned=1
-stage_app="$stage_dir/CodexQuotaChecker.app"
+# 실패한 교체 작업의 기존 앱 복원
 restore_backup() {
     (( backup_owned )) || return 0
     if [[ -z "$backup_app" || ! -d "$backup_app" ]]; then
@@ -101,7 +105,9 @@ restore_backup() {
     return 1
 }
 
+# 빌드 표시·임시 스테이징 정리 및 보존 앱 복원
 cleanup() {
+    stop_build_progress
     if (( stage_owned )) && [[ -n "$stage_dir" && -d "$stage_dir" ]]; then
         rm -rf -- "$stage_dir"
     fi
@@ -109,7 +115,60 @@ cleanup() {
         restore_backup || print -u2 "Old app bundle remains preserved at: $backup_app"
     fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# 터미널에서 스피너·경과 시간 표시 및 원본 빌드 로그·종료 코드 유지
+build_app() {
+    if [[ ! -t 1 || ! -t 2 || "${TERM:-dumb}" == "dumb" ]]; then
+        (cd "$package_root" && swift build -c "$configuration" --product CodexQuotaMonitor)
+        return
+    fi
+
+    local build_started=$SECONDS
+    local build_result=0
+    (
+        local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+        local frame_index=1
+        while true; do
+            printf '\r\033[2K%s Building app… %ds' "$frames[$frame_index]" "$(( SECONDS - build_started ))" >&2
+            frame_index=$(( frame_index % ${#frames} + 1 ))
+            sleep 0.1
+        done
+    ) &
+    spinner_pid=$!
+
+    if (cd "$package_root" && swift build -c "$configuration" --product CodexQuotaMonitor 2>&1) |
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            printf '\r\033[2K%s\n' "$line"
+        done
+    then
+        build_result=0
+    else
+        build_result=$?
+    fi
+    stop_build_progress
+    if (( build_result == 0 )); then
+        print "✓ Build complete ($(( SECONDS - build_started ))s)"
+    else
+        print -u2 "✗ Build failed (exit $build_result, $(( SECONDS - build_started ))s)"
+    fi
+    return "$build_result"
+}
+
+build_app
+build_bin_path="$(cd "$package_root" && swift build -c "$configuration" --show-bin-path)"
+binary="$build_bin_path/CodexQuotaMonitor"
+info_plist="$package_root/resource/Info.plist"
+app_icon="$package_root/resource/AppIcon.icns"
+[[ -x "$binary" ]] || { print -u2 "Built executable not found: $binary"; exit 1; }
+[[ -f "$info_plist" ]] || { print -u2 "Info.plist not found: $info_plist"; exit 1; }
+[[ -f "$app_icon" ]] || { print -u2 "App icon not found: $app_icon"; exit 1; }
+
+stage_dir="$(mktemp -d "$destination_dir/.CodexQuotaChecker.stage.XXXXXX")"
+stage_owned=1
+stage_app="$stage_dir/CodexQuotaChecker.app"
 
 mkdir -p "$stage_app/Contents/MacOS" "$stage_app/Contents/Resources"
 cp -- "$binary" "$stage_app/Contents/MacOS/CodexQuotaMonitor"
@@ -131,11 +190,7 @@ chmod 755 "$stage_app/Contents/MacOS/CodexQuotaMonitor"
 }
 /usr/bin/plutil -lint "$stage_app/Contents/Info.plist" >/dev/null
 
-# ServiceManagement identifies the main app from its signed bundle. An
-# unsigned SwiftPM executable may expose the executable name as its code-sign
-# identifier and leaves Info.plist/resources unbound, which makes mainApp
-# appear as notFound. Ad-hoc signing is sufficient for local packaging and
-# deliberately does not claim distribution signing or notarization.
+# ServiceManagement의 앱 식별을 위한 번들·리소스 임시 서명 및 식별자 대조
 /usr/bin/codesign --force --deep --sign - --timestamp=none "$stage_app"
 /usr/bin/codesign --verify --deep --strict "$stage_app"
 bundle_identifier="$(/usr/bin/plutil -extract CFBundleIdentifier raw "$stage_app/Contents/Info.plist")"
@@ -155,8 +210,7 @@ if [[ -e "$target_app" ]]; then
     backup_owned=1
 fi
 
-# The sibling backup makes this two-rename replacement recoverable; it is not
-# a single filesystem operation and is deliberately validated before commit.
+# 기존 앱을 형제 백업으로 보존한 뒤 검증된 스테이징 번들로 교체
 if ! mv -- "$stage_app" "$target_app"; then
     restore_backup || true
     print -u2 "Unable to install staged app bundle: $target_app"
