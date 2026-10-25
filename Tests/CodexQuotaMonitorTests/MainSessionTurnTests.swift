@@ -80,7 +80,9 @@ final class MainSessionTurnTests: XCTestCase {
         XCTAssertEqual(events.map(\.sessionTitle), ["메인 세션", "메인 세션"])
         XCTAssertNotEqual(events[0].id, events[1].id)
         let queue = SessionActivityToastQueue(sleep: { _ in await Task.yield() })
-        events.forEach(queue.enqueue)
+        for event in events {
+            queue.enqueue(event)
+        }
         XCTAssertEqual(queue.currentLeft?.transition?.turnID, "turn-1")
         XCTAssertEqual(queue.pendingLeft.first?.transition?.turnID, "turn-2")
         let copy = NotchActivityToastCopy.make(for: try XCTUnwrap(queue.currentLeft))
