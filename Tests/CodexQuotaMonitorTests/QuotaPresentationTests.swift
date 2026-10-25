@@ -4,6 +4,43 @@ import SwiftUI
 
 @MainActor
 final class QuotaPresentationTests: XCTestCase {
+    /// 전송 성공과 한도별 관측 결과를 구분한 상세 문구 검증
+    func testProbeTextDistinguishesStableAndMovingWindows() {
+        let now = Date()
+        let account = AccountState(id: "C1", status: .normal)
+        let confirmation = ResetTimeConfirmationResult(primary: .stableObserved, secondary: .movingObserved,
+            account: account, lastRefreshSucceeded: true, isCurrentAccount: true, queryCount: 4)
+        let presentation = UsageWindowProbePresentationResult(
+            result: UsageWindowProbeResult(accountID: "C1", status: .success, startedAt: now, completedAt: now),
+            quotaRefreshSucceeded: true, resetConfirmation: confirmation)
+        let section = UsageWindowProbeSection(account: account, probe: presentation)
+        XCTAssertEqual(section.resultText, "전송 완료 · 5시간 고정 관측 · 주간 변동 중")
+    }
+
+    /// 후속 조회 대기 중 전송 완료와 추가 소비 없는 확인 단계 표시 검증
+    func testRunningConfirmationIsNotPresentedAsSendingAgain() {
+        let section = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal),
+            isRunning: true, isConfirming: true)
+        XCTAssertEqual(section.resultText, "전송 완료 · 시각 확인 중")
+        XCTAssertEqual(section.buttonTitle, "시각 확인 중…")
+        XCTAssertFalse(section.canRun)
+    }
+
+    /// 더 늦게 도착한 이전 구간 Ping 스냅샷의 최신 계정 상태 덮어쓰기 차단 검증
+    func testProbeSnapshotFromOldSegmentCannotReplaceCurrentAccount() {
+        let now = Date()
+        var current = AccountState(id: "C1", primaryUsedPercent: 20, lastUpdated: now, status: .normal)
+        current.primaryResetSegmentID = UUID()
+        var previousSegment = current
+        previousSegment.primaryUsedPercent = 80
+        previousSegment.primaryResetSegmentID = UUID()
+        previousSegment.lastUpdated = now.addingTimeInterval(1)
+        let presentation = UsageWindowProbePresentationResult(
+            result: UsageWindowProbeResult(accountID: "C1", status: .success, startedAt: now, completedAt: now),
+            quotaRefreshSucceeded: true, refreshedAccount: previousSegment)
+        XCTAssertEqual(AccountDashboardPresentation.accountForDisplay(current: current, probe: presentation), current)
+    }
+
     /// 현행 세션 목록의 작업·대기·최근 시각 순서와 하위 에이전트 보존 검증
     func testCardsSortWorkingThenWaitingThenMostRecentAndKeepInactiveAgents() {
         let sessions = [
@@ -305,7 +342,7 @@ final class QuotaPresentationTests: XCTestCase {
         let finished = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal), probe: presentation, lastExecutionAt: current)
         XCTAssertEqual(finished.lastRunText, AccountDashboardFormatting.dateText(current, timeStyle: .medium))
         XCTAssertEqual(finished.tokenText, "174 토큰")
-        XCTAssertEqual(finished.resultText, "초기화 시간 확인 완료")
+        XCTAssertEqual(finished.resultText, "전송 완료 · 시각 확인 중")
     }
 
     /// 빠른 응답에서도 진입 완료 후 퇴장하고 실패 시 중앙에 정지하는지 검증

@@ -27,51 +27,23 @@ public struct EarlyQuotaReset: Equatable, Sendable {
         return allowed.isEmpty ? nil : Self(accountID: accountID, windows: allowed)
     }
 
-    /// 조기 초기화 중 리셋권 사용·사용 여부 불명확한 조회 제외
+    /// 원인 분류와 독립적인 조기 초기화 감지의 이전 스냅샷 호환 경계
     public static func detect(
         previous: PreferencesStore.QuotaSnapshot?,
         current: AccountState,
         now: Date = Date()
     ) -> EarlyQuotaReset? {
         guard current.status == .normal, let previous else { return nil }
-        var windows: [Window] = []
-        if didReset(
-            previousUsed: previous.primaryUsedPercent,
-            currentUsed: current.primaryUsedPercent,
-            previousReset: previous.primaryResetAt,
-            currentReset: current.primaryResetAt,
-            now: now
-        ) {
-            windows.append(.primary)
-        }
-        if didReset(
-            previousUsed: previous.secondaryUsedPercent,
-            currentUsed: current.secondaryUsedPercent,
-            previousReset: previous.secondaryResetAt,
-            currentReset: current.secondaryResetAt,
-            now: now
-        ) {
-            windows.append(.secondary)
-        }
-        guard !windows.isEmpty,
-              let credits = current.resetCredits,
-              credits.usageEvidence(comparedTo: previous.resetCredits, now: now) == .notObserved
-        else { return nil }
+        var before = AccountState(
+            id: current.id, email: current.email, planType: current.planType,
+            primaryUsedPercent: previous.primaryUsedPercent, secondaryUsedPercent: previous.secondaryUsedPercent,
+            primaryResetAt: previous.primaryResetAt, secondaryResetAt: previous.secondaryResetAt,
+            resetCredits: previous.resetCredits, lastUpdated: previous.lastUpdated, status: .normal
+        )
+        before.configurationGeneration = current.configurationGeneration
+        let windows = QuotaResetChange.detect(previous: before, current: current, now: now)
+            .filter { $0.kind == .reset && $0.previousReset > now }.map(\.window)
+        guard !windows.isEmpty else { return nil }
         return EarlyQuotaReset(accountID: current.id, windows: windows)
-    }
-
-    /// 사용량 0 도달 또는 새 리셋 구간 진입을 동반한 사용량 감소 확인
-    private static func didReset(
-        previousUsed: Double?,
-        currentUsed: Double?,
-        previousReset: Date?,
-        currentReset: Date?,
-        now: Date
-    ) -> Bool {
-        guard let previousUsed, let currentUsed,
-              let previousReset, now < previousReset,
-              currentUsed < previousUsed
-        else { return false }
-        return currentUsed == 0 || currentReset.map { $0 > previousReset } == true
     }
 }

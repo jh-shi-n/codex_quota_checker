@@ -912,6 +912,9 @@ public enum DiagnosticEvent: String, CaseIterable, Sendable {
     case automaticResetPingSkipped
     case automaticResetPingAttempt
     case automaticResetPingFinished
+    case quotaResetDetected
+    case resetObservationUpdated
+    case resetConfirmationUpdated
 }
 
 /// - 목적: OSLog·파일 진단 수준
@@ -943,6 +946,10 @@ public enum DiagnosticField: String, CaseIterable, Sendable {
     case requestID
     case reason
     case attempt
+    case window
+    case cause
+    case observation
+    case segmentID
 }
 
 /// - 목적: 진단 JSONL에 저장할 값 형식

@@ -14,6 +14,11 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     /// 영속 스냅샷과 분리한 현재 실행의 초기화 시각 관측
     public var primaryResetObservation: ResetTimeObservation = .checking
     public var secondaryResetObservation: ResetTimeObservation = .checking
+    /// 현재 실행의 한도별 관측 구간; 영속 캐시·재실행 간 재사용 제외
+    public var primaryResetSegmentID: UUID?
+    public var secondaryResetSegmentID: UUID?
+    /// 현재 정상 응답에서 확인한 변화; 캐시 복원과 다음 조회 간 재사용 제외
+    public var resetChanges: [QuotaResetChange] = []
     public var lastUpdated: Date?
     public var status: AccountStatus
     public var errorMessage: String?

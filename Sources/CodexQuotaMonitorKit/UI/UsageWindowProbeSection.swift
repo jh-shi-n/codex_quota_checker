@@ -30,6 +30,7 @@ public struct UsageWindowProbeSection: View {
     public let account: AccountState
     public let probe: UsageWindowProbePresentationResult?
     public let isRunning: Bool
+    public let isConfirming: Bool
     public let runningStartedAt: Date?
     public let lastExecutionAt: Date?
     public let isConfigured: Bool
@@ -47,11 +48,13 @@ public struct UsageWindowProbeSection: View {
         lastExecutionAt: Date? = nil,
         isConfigured: Bool? = nil,
         onRun: @escaping () -> Void = {},
-        automaticResetPingEnabled: Binding<Bool>? = nil
+        automaticResetPingEnabled: Binding<Bool>? = nil,
+        isConfirming: Bool = false
     ) {
         self.account = account
         self.probe = probe
         self.isRunning = isRunning
+        self.isConfirming = isConfirming
         self.runningStartedAt = runningStartedAt
         self.lastExecutionAt = lastExecutionAt
         self.isConfigured = isConfigured ?? (account.status != .notConfigured)
@@ -147,7 +150,7 @@ public struct UsageWindowProbeSection: View {
 
     /// 실행 중 여부에 따른 버튼 표시명
     public var buttonTitle: String {
-        if isRunning { return "전송 중…" }
+        if isRunning { return isConfirming ? "시각 확인 중…" : "전송 중…" }
         return "시간 설정"
     }
 
@@ -186,7 +189,7 @@ public struct UsageWindowProbeSection: View {
         // While a new request is active, do not leave a previous failure or
         // success looking like the current result. The terminal categorical
         // result is shown again as soon as the callback completes.
-        if isRunning { return "전송 중" }
+        if isRunning { return isConfirming ? "전송 완료 · 시각 확인 중" : "전송 중" }
         guard let result = probe?.result else {
             return "실행 전"
         }
@@ -194,8 +197,14 @@ public struct UsageWindowProbeSection: View {
         if result.isSuccess, probe?.quotaRefreshSucceeded == false {
             return "전송 완료 · 한도 조회 실패"
         }
+        if result.isSuccess, let confirmation = probe?.resetConfirmation {
+            return "전송 완료 · 5시간 \(confirmation.primary.text) · 주간 \(confirmation.secondary.text)"
+        }
         if result.isSuccess, probe?.quotaRefreshSucceeded == true {
-            return "초기화 시간 확인 완료"
+            if account.primaryResetObservation == .stableObserved && account.secondaryResetObservation == .stableObserved {
+                return "전송 완료 · 시각 고정 관측"
+            }
+            return "전송 완료 · 시각 확인 중"
         }
         return result.isSuccess ? "전송 완료" : (result.failureCategory?.userMessage ?? "실패")
     }

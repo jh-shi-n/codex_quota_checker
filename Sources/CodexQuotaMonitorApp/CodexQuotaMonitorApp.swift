@@ -82,6 +82,17 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
     )
     let refreshService: RefreshService
+    /// 전송과 후속 관측을 합친 계정별 중복 실행 차단
+    var runningProbeAccountIDs: Set<String> = []
+    /// 수동·자동 Ping이 공통으로 사용하는 시각 고정 확인
+    lazy var resetTimeConfirmation = ResetTimeConfirmationService(
+        refresh: { [weak self] id in
+            guard let self else { return nil }
+            await self.accountStore.refresh(accountID: id, forceFresh: true)
+            return self.accountStore.state(for: id)
+        },
+        current: { [weak self] id in self?.accountStore.state(for: id) }
+    )
     let launchAtLoginService: LaunchAtLoginService
     let sessionActivityProvider: SQLiteSessionActivityProvider
     /// The probe service owns process lifetime and the per-account running gate.
@@ -416,6 +427,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     private func runUsageWindowProbe(
         _ account: AccountState
     ) async -> UsageWindowProbePresentationResult {
+        guard runningProbeAccountIDs.insert(account.id).inserted else {
+            return AccountDashboardDefaults.unavailableProbe(accountID: account.id, category: .alreadyRunning)
+        }
+        defer { runningProbeAccountIDs.remove(account.id) }
         guard let config = accountStore.configs.first(where: { $0.id == account.id }),
               config.isConfigured,
               accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
@@ -447,11 +462,12 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 isCurrentAccount: isCurrent
             )
         }
-        let refresh = await accountStore.refreshOutcome(accountID: account.id, forceFresh: true)
-        let didRefresh = refresh.isSuccess
+        UsageWindowProbeStore.shared.markConfirming(for: account)
+        let confirmation = await resetTimeConfirmation.confirm(before)
+        let didRefresh = confirmation.lastRefreshSucceeded
         let isStillCurrent = generation == accountStore.state(for: account.id)?.configurationGeneration
             && accountStore.configs.first(where: { $0.id == account.id }) == config
-        let after = didRefresh && isStillCurrent ? accountStore.state(for: account.id) : nil
+        let after = isStillCurrent ? confirmation.account : nil
         return UsageWindowProbePresentationResult(
             result: result,
             primaryResetBefore: before.primaryResetAt,
@@ -460,7 +476,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             secondaryResetAfter: after?.secondaryResetAt,
             quotaRefreshSucceeded: didRefresh && isStillCurrent,
             refreshedAccount: after,
-            isCurrentAccount: isStillCurrent
+            isCurrentAccount: isStillCurrent && confirmation.isCurrentAccount,
+            resetConfirmation: confirmation
         )
     }
 

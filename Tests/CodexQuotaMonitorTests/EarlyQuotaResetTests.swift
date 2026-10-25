@@ -115,8 +115,8 @@ final class EarlyQuotaResetTests: XCTestCase {
         XCTAssertEqual(events.count, 1)
     }
 
-    /// 리셋권 사용·소멸과 사용 여부 불명 상황에서 알림 제외 확인
-    func testResetCreditUsageAndAmbiguousExpirySuppressNotification() {
+    /// 리셋권 사용·소멸 정보가 초기화 감지 자체를 차단하지 않는지 확인
+    func testResetCreditUsageAndAmbiguousExpiryDoNotHideRecovery() {
         let active = RateLimitResetCredits.Credit(id: "active", expiresAt: now.addingTimeInterval(600))
         let expired = RateLimitResetCredits.Credit(id: "expired", expiresAt: now.addingTimeInterval(-1))
         var current = state(primary: 0)
@@ -128,22 +128,22 @@ final class EarlyQuotaResetTests: XCTestCase {
             let before = PreferencesStore.QuotaSnapshot(
                 usedPercent: 60, resetAt: now.addingTimeInterval(3_600), resetCredits: credits
             )
-            XCTAssertNil(EarlyQuotaReset.detect(previous: before, current: current, now: now))
+            XCTAssertNotNil(EarlyQuotaReset.detect(previous: before, current: current, now: now))
         }
         let expiredBefore = PreferencesStore.QuotaSnapshot(
             usedPercent: 60, resetAt: now.addingTimeInterval(3_600),
             resetCredits: RateLimitResetCredits(availableCount: 1, credits: [expired])
         )
-        XCTAssertNil(EarlyQuotaReset.detect(previous: expiredBefore, current: current, now: now))
+        XCTAssertNotNil(EarlyQuotaReset.detect(previous: expiredBefore, current: current, now: now))
         current.resetCredits = nil
-        XCTAssertNil(EarlyQuotaReset.detect(previous: snapshot(), current: current, now: now))
+        XCTAssertNotNil(EarlyQuotaReset.detect(previous: snapshot(), current: current, now: now))
         let legacyBefore = PreferencesStore.QuotaSnapshot(usedPercent: 60, resetAt: now.addingTimeInterval(3_600))
         current.resetCredits = RateLimitResetCredits(availableCount: 0)
-        XCTAssertNil(EarlyQuotaReset.detect(previous: legacyBefore, current: current, now: now))
+        XCTAssertNotNil(EarlyQuotaReset.detect(previous: legacyBefore, current: current, now: now))
     }
 
-    /// 잔여 리셋권이 있는 주간 11%→0% 초기화의 저장·알림·중복 방지 검증
-    func testWeeklyResetWithUnchangedAvailableCreditsNotifiesOnce() async {
+    /// 최초 캐시 복원과 실제 초기화 이벤트의 혼동 방지 검증
+    func testCachedWeeklyRecoveryDoesNotNotifyOnFirstServerReading() async {
         let suite = "WeeklyResetRegression.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -178,9 +178,7 @@ final class EarlyQuotaResetTests: XCTestCase {
         await store.refresh(accountID: config.id)
         await store.refresh(accountID: config.id)
 
-        XCTAssertEqual(events.count, 1)
-        XCTAssertEqual(events.first?.accountID, "C4")
-        XCTAssertTrue(events.first?.windows.contains(.secondary) == true)
+        XCTAssertTrue(events.isEmpty)
         XCTAssertEqual(store.state(for: "C4")?.secondaryUsedPercent, 0)
         XCTAssertEqual(preferences.quotaSnapshot(for: config.home)?.secondaryUsedPercent, 0)
     }
@@ -222,7 +220,8 @@ private actor ResetStateLoader {
 
     /// 마지막 결과를 보존하면서 다음 조회 결과 반환
     func next() -> AccountState {
-        if states.count > 1 { return states.removeFirst() }
-        return states[0]
+        var state = states.count > 1 ? states.removeFirst() : states[0]
+        state.lastUpdated = Date()
+        return state
     }
 }

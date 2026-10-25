@@ -90,6 +90,7 @@ final class UsageWindowProbeStoreTests: XCTestCase {
         let quota = ProbeStoreTestGate()
         let task = store.start(for: account) { account in
             await ping.wait()
+            store.markConfirming(for: account)
             await quota.wait()
             XCTAssertFalse(Task.isCancelled)
             return UsageWindowProbePresentationResult(
@@ -99,15 +100,18 @@ final class UsageWindowProbeStoreTests: XCTestCase {
             )
         }!
         await ping.waitUntilStarted()
+        XCTAssertFalse(store.isConfirming(for: account))
         let caller = Task { await task.value }
         caller.cancel()
         await ping.release()
         await quota.waitUntilStarted()
         XCTAssertTrue(store.isRunning(for: account))
+        XCTAssertTrue(store.isConfirming(for: account))
         XCTAssertNil(store.presentation(for: account))
         await quota.release()
         await caller.value
         XCTAssertFalse(store.isRunning(for: account))
+        XCTAssertFalse(store.isConfirming(for: account))
         XCTAssertEqual(store.presentation(for: account)?.quotaRefreshSucceeded, true)
     }
 
