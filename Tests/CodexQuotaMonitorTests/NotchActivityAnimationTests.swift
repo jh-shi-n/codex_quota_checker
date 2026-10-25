@@ -45,9 +45,19 @@ final class NotchActivityAnimationTests: XCTestCase {
             assertInnerEdge(expanded, matches: idle, side: side)
 
             model.setToast(nil)
-            try await Task.sleep(for: .milliseconds(350))
-            XCTAssertEqual(try blackBounds(host), idle)
+            let collapsed = try await waitForBlackBounds(host, matching: idle)
+            XCTAssertEqual(collapsed, idle)
         }
+    }
+
+    /// CI 렌더링 지연을 허용하되 3초 이내 배경 복원 검증
+    private func waitForBlackBounds(_ host: NSView, matching expected: CGRect) async throws -> CGRect {
+        for _ in 0..<60 {
+            let bounds = try blackBounds(host)
+            if bounds == expected { return bounds }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return try blackBounds(host)
     }
 
     /// 배경 중앙 행의 불투명 검은 픽셀 범위 측정
