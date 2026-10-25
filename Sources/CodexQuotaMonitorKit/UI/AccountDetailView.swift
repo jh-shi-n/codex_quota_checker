@@ -69,15 +69,7 @@ public struct AccountDetailView: View {
 
                 accountActivity
 
-                UsageWindowProbeSection(
-                    account: displayedAccount,
-                    probe: currentProbePresentation,
-                    isRunning: isProbeRunning,
-                    runningStartedAt: probeStore.startedAt(for: account),
-                    lastExecutionAt: probeStore.lastStartedAt(for: account),
-                    isConfigured: displayedAccount.status != .notConfigured,
-                    onRun: runProbe
-                )
+                usageWindowProbeSection
 
                 if let errorMessage = account.errorMessage, !errorMessage.isEmpty {
                     Text(errorMessage)
@@ -101,6 +93,22 @@ public struct AccountDetailView: View {
         .background(Color(red: 0.075, green: 0.085, blue: 0.10))
         .preferredColorScheme(.dark)
 
+    }
+
+    /// 공통 자동 전송 설정을 관찰하는 상세 화면의 시간 설정 영역 구성
+    @ViewBuilder
+    private var usageWindowProbeSection: some View {
+        let section = UsageWindowProbeSection(
+            account: displayedAccount, probe: currentProbePresentation,
+            isRunning: isProbeRunning, runningStartedAt: probeStore.startedAt(for: account),
+            lastExecutionAt: probeStore.lastStartedAt(for: account),
+            isConfigured: displayedAccount.status != .notConfigured, onRun: runProbe
+        )
+        if let tokenUsagePreferences {
+            UsageWindowProbePreferencesView(preferences: tokenUsagePreferences, section: section)
+        } else {
+            section
+        }
     }
 
     /// 계정 정보와 버튼에 인접한 조회 시각·상태의 2행 표시

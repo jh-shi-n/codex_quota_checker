@@ -241,6 +241,14 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
         super.init()
 
+        preferences.onAutomaticResetPingChanged = { [weak self] enabled in
+            guard let self else { return }
+            self.automaticResetPing.reconcile(states: self.accountStore.states, enabled: enabled)
+            if enabled, self.quotaResetNotifications.delivery.status.authorization == .notRequested {
+                self.quotaResetNotifications.retryAuthorization()
+            }
+        }
+
         accountStore.onQuotaRefreshStarted = { [weak serviceStatus] in
             serviceStatus?.refresh()
         }

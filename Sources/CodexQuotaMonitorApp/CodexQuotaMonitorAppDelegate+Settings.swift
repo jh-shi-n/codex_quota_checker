@@ -96,19 +96,6 @@ extension CodexQuotaMonitorAppDelegate {
                     }
                 }
             ),
-            automaticResetPingEnabled: Binding(
-                get: { [weak self] in self?.preferences.automaticResetPingEnabled ?? false },
-                set: { [weak self] enabled in
-                    guard let self else { return }
-                    self.preferences.updateAutomaticResetPing(enabled)
-                    self.automaticResetPing.reconcile(states: self.accountStore.states,
-                        enabled: self.preferences.automaticResetPingEnabled)
-                    if self.preferences.automaticResetPingEnabled,
-                       self.quotaResetNotifications.delivery.status.authorization == .notRequested {
-                        self.quotaResetNotifications.retryAuthorization()
-                    }
-                }
-            ),
             notificationDelivery: quotaResetNotifications.delivery,
             onRetryNotificationAuthorization: { [weak self] in
                 self?.quotaResetNotifications.retryAuthorization()

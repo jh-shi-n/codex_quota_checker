@@ -88,6 +88,8 @@ public final class PreferencesStore: ObservableObject {
     @Published public private(set) var showAccountLabels: Bool
     @Published public private(set) var activityNotificationDurationSeconds: Int
     @Published public private(set) var persistenceError: String?
+    /// 자동 전송 선택의 저장 성공 이후에만 예약·권한 동작 연결
+    public var onAutomaticResetPingChanged: (@MainActor (Bool) -> Void)?
 
     private let userDefaults: UserDefaults
     private let configurationFile: AppConfigurationFile?
@@ -400,8 +402,12 @@ public final class PreferencesStore: ObservableObject {
     /// 자동 Ping 선택의 영속 저장 및 저장 실패 시 기존 설정 복원
     public func updateAutomaticResetPing(_ enabled: Bool) {
         guard !settingsLoadFailed else { return }
+        let previous = automaticResetPingEnabled
         automaticResetPingEnabled = enabled
-        persist()
+        guard persist() else { return }
+        if previous != automaticResetPingEnabled {
+            onAutomaticResetPingChanged?(automaticResetPingEnabled)
+        }
     }
 
     /// 사전 알림 선택값의 허용 범위 정규화
