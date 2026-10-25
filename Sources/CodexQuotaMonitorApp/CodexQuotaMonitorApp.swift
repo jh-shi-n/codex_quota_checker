@@ -261,7 +261,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return .failure(.cancelled) }
                 return await self.consumeResetCredit(account, creditID: creditID, attempt: attempt)
             },
-            runUsageWindowProbe: runUsageWindowProbe,
+            runUsageWindowProbe: runUsageWindowProbe
         )
 
         notchLayoutManager.leftPanel.onRefresh = { [weak self] account in

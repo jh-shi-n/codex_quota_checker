@@ -97,7 +97,15 @@ private final class UNQuotaResetNotificationBackend: QuotaResetNotificationBacke
 
     /// 시스템 알림 권한 요청
     func requestAuthorization() async throws {
-        _ = try await center.requestAuthorization(options: [.alert])
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            center.requestAuthorization(options: [.alert]) { _, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
     }
 
     /// 조용한 즉시 표시 알림 전달
@@ -110,6 +118,14 @@ private final class UNQuotaResetNotificationBackend: QuotaResetNotificationBacke
             content: content,
             trigger: nil
         )
-        try await center.add(request)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            center.add(request) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
     }
 }
