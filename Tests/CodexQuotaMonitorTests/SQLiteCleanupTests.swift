@@ -20,14 +20,43 @@ final class SQLiteCleanupTests: XCTestCase {
         let db = try XCTUnwrap(pointer)
         defer { sqlite3_exec(db, "ROLLBACK", nil, nil, nil); sqlite3_close(db) }
         XCTAssertEqual(sqlite3_exec(db, "BEGIN EXCLUSIVE", nil, nil, nil), SQLITE_OK)
-        let started = Date()
+        let gate = SQLiteBusyOrderingGate()
+        defer { gate.release() }
+        let blockedRead = Task {
+            try await DatabaseWorkQueue.perform {
+                defer { gate.finish() }
+                var pointer: OpaquePointer?
+                guard sqlite3_open(database.path, &pointer) == SQLITE_OK, let connection = pointer else {
+                    if let pointer { sqlite3_close(pointer) }
+                    throw CocoaError(.fileReadUnknown)
+                }
+                defer { sqlite3_close(connection) }
+                sqlite3_busy_handler(connection, { context, _ in
+                    guard let context else { return 0 }
+                    return Unmanaged<SQLiteBusyOrderingGate>.fromOpaque(context).takeUnretainedValue().waitForRelease()
+                }, Unmanaged.passUnretained(gate).toOpaque())
+                let code = sqlite3_exec(connection, "SELECT count(*) FROM quota_snapshots", nil, nil, nil)
+                return (code, Thread.isMainThread)
+            }
+        }
+        var entered = gate.entered.makeAsyncIterator()
+        let busyEntered = await entered.next()
+        XCTAssertNotNil(busyEntered)
+        // 실제 SQLite busy callback이 전용 큐를 점유한 동안 MainActor 작업 수행
+        XCTAssertTrue(gate.isWaiting)
+        XCTAssertEqual(sqlite3_get_autocommit(db), 0)
         preferences.updateQuotaSnapshot(for: root, snapshot: .init(usedPercent: 42, lastUpdated: Date()))
-        try await Task.sleep(for: .milliseconds(20))
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.15)
+        XCTAssertTrue(gate.isWaiting)
         XCTAssertEqual(preferences.quotaSnapshot(for: root)?.usedPercent, 42)
+        // 큐가 해제되기 전 SQL 실패를 동기 반영하지 않는 순서 보장
+        XCTAssertNil(preferences.cacheError)
+        gate.release()
+        let (readCode, ranOnMainThread) = try await blockedRead.value
+        XCTAssertEqual(readCode, SQLITE_BUSY)
+        XCTAssertFalse(ranOnMainThread)
         await preferences.waitForCacheIO()
+        XCTAssertEqual(sqlite3_get_autocommit(db), 0)
         XCTAssertNotNil(preferences.cacheError)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
     }
 
     /// 기존 0755 디렉터리·0644 DB와 sidecar의 사용자 전용 권한 보정
@@ -123,4 +152,43 @@ final class SQLiteCleanupTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         try operation(root.appendingPathComponent("token-usage.sqlite"))
     }
+}
+
+/// SQLite 잠금 대기 진입과 MainActor 작업 완료의 실행 순서 조정
+private final class SQLiteBusyOrderingGate: @unchecked Sendable {
+    let entered: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+    private let released = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var waiting = false
+
+    /// 잠금 대기 진입 신호의 비동기 소비 경계 생성
+    init() {
+        let stream = AsyncStream<Void>.makeStream()
+        entered = stream.stream
+        continuation = stream.continuation
+    }
+
+    /// 실제 busy callback이 해제 신호를 기다리는 상태 확인
+    var isWaiting: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return waiting
+    }
+
+    /// busy callback에서 진입 신호 전달 후 명시적 해제 대기
+    func waitForRelease() -> Int32 {
+        lock.lock(); waiting = true; lock.unlock()
+        continuation.yield(())
+        // 성능 판정과 무관한 테스트 교착 방지용 최종 제한시간
+        _ = released.wait(timeout: .now() + 30)
+        lock.lock(); waiting = false; lock.unlock()
+        return 0
+    }
+
+    /// MainActor 검증 완료 또는 오류 경로의 잠금 대기 해제
+    func release() { released.signal() }
+
+    /// 연결 오류에서도 진입 대기자가 무기한 정지하지 않도록 스트림 종료
+    func finish() { continuation.finish() }
 }
