@@ -48,6 +48,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let accountStore: AccountStore
     /// 할당량 조회에 동반하여 갱신하는 네 계정 공용 서비스 상태
     let serviceStatus: OpenAIServiceStatusStore
+    let appUpdates = AppUpdateStore()
     let quotaResetNotifications: QuotaResetNotificationService
     /// 안정 관측된 한도의 시각 도달 조회와 사전·도달 시스템 알림 연결
     lazy var quotaResetScheduler = QuotaResetScheduler(
