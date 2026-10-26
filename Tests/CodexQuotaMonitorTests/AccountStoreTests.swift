@@ -4,6 +4,43 @@ import XCTest
 
 @MainActor
 final class AccountStoreTests: XCTestCase {
+    /// 강제 조회로 교체된 이전 detached 조회까지 종료 시 취소 검증
+    func testShutdownCancelsBothOverlappingForcedFetches() async {
+        let gate = AccountLoaderProbe()
+        let cancelled = CallCounter()
+        let store = AccountStore(configs: makeConfigs()) { config in
+            await gate.started(UUID().uuidString)
+            do { try await Task.sleep(for: .seconds(60)) }
+            catch { _ = await cancelled.increment(config.id) }
+            return AccountState(id: config.id, status: .error)
+        }
+        let first = Task { await store.refresh(accountID: "C1", forceFresh: true) }
+        await gate.waitForStartedCount(1)
+        let second = Task { await store.refresh(accountID: "C1", forceFresh: true) }
+        await gate.waitForStartedCount(2)
+        await store.shutdown()
+        await first.value
+        await second.value
+        let count = await cancelled.increment("C1")
+        XCTAssertEqual(count, 3)
+    }
+
+    /// 마지막 대기자 취소의 실제 loader 전파 검증
+    func testCancellingOnlyWaiterCancelsDetachedFetch() async {
+        let gate = AccountLoaderProbe()
+        let store = AccountStore(configs: makeConfigs()) { config in
+            await gate.started(config.id)
+            try await Task.sleep(for: .seconds(60))
+            return AccountState(id: config.id, status: .normal)
+        }
+        let task = Task { await store.refresh(accountID: "C1") }
+        await gate.waitForStartedCount(1)
+        let started = Date()
+        task.cancel()
+        await task.value
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
     /// 최초 대기에는 회전 표시 없이 새로고침 허용, 실제 요청 중에만 로딩 전환 검증
     func testInitialWaitingBecomesLoadingOnlyWhenRefreshStarts() async throws {
         let gate = AccountLoaderProbe()

@@ -52,6 +52,8 @@ public final class AccountStore: ObservableObject {
     private var configRevision = 0
     private var accountGenerations: [String: Int] = [:]
     private var inFlightFetches: [FetchKey: FetchHandle] = [:]
+    private var activeFetches: [UUID: FetchHandle] = [:]
+    private var shuttingDown = false
     private var appliedRequestIDs: [String: UUID] = [:]
     private var latestRequestIDs: [String: UUID] = [:]
     private var resetHistories: [String: ResetHistory] = [:]
@@ -342,7 +344,22 @@ public final class AccountStore: ObservableObject {
     private final class FetchHandle: @unchecked Sendable {
         let task: Task<AccountFetchResult, Never>
         let requestID: UUID
+        private let lock = NSLock()
+        private var waiters = Set<UUID>()
 
+        /// 공유 조회 소비자의 독립 취소를 위한 참조 등록
+        func addWaiter(_ id: UUID) { lock.lock(); waiters.insert(id); lock.unlock() }
+
+        /// 마지막 소비자 취소 시에만 실제 조회 취소
+        func removeWaiter(_ id: UUID) {
+            lock.lock()
+            let removed = waiters.remove(id) != nil
+            let cancel = removed && waiters.isEmpty
+            lock.unlock()
+            if cancel { task.cancel() }
+        }
+
+        /// 비동기 조회 작업과 요청 식별자 연결
         init(task: Task<AccountFetchResult, Never>, requestID: UUID) {
             self.task = task
             self.requestID = requestID
@@ -357,13 +374,13 @@ public final class AccountStore: ObservableObject {
         revision: Int,
         forceFresh: Bool = false
     ) async -> AccountFetchResult {
-        guard configs.first(where: { $0.id == config.id }) == config,
+        guard !shuttingDown, !Task.isCancelled, configs.first(where: { $0.id == config.id }) == config,
               state(for: config.id)?.configurationGeneration == revision else {
             return AccountFetchResult(config: config, state: AccountState(id: config.id, status: .error))
         }
         let key = FetchKey(id: config.id, homePath: config.home.path, revision: revision)
         let handle: FetchHandle
-        if !forceFresh, let existing = inFlightFetches[key] {
+        if !forceFresh, let existing = inFlightFetches[key], !existing.task.isCancelled {
             handle = existing
         } else {
             let requestID = UUID()
@@ -387,15 +404,35 @@ public final class AccountStore: ObservableObject {
             }
             let created = FetchHandle(task: task, requestID: requestID)
             inFlightFetches[key] = created
+            activeFetches[requestID] = created
             handle = created
         }
 
         latestRequestIDs[config.id] = handle.requestID
-        let result = await handle.task.value
+        let waiterID = UUID()
+        handle.addWaiter(waiterID)
+        let result = await withTaskCancellationHandler {
+            await handle.task.value
+        } onCancel: {
+            handle.removeWaiter(waiterID)
+        }
+        handle.removeWaiter(waiterID)
+        activeFetches[handle.requestID] = nil
         if inFlightFetches[key] === handle {
             inFlightFetches[key] = nil
         }
         return result
+    }
+
+    /// 앱 종료 시 덮어쓴 이전 조회까지 취소하고 제한시간 내 자식 종료 대기
+    public func shutdown(timeout: TimeInterval = 2) async {
+        shuttingDown = true
+        let handles = Array(activeFetches.values)
+        for handle in handles { handle.task.cancel() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !activeFetches.isEmpty && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     nonisolated private static func fetch(

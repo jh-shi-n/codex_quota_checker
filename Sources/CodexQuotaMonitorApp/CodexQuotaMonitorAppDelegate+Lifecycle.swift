@@ -37,6 +37,20 @@ extension CodexQuotaMonitorAppDelegate {
         synchronizeLaunchAtLoginStatus()
     }
 
+    /// 종료 응답을 지연해 비동기 조회 취소와 native 자식 정리에 최대 2초 제공
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        quotaMonitoring.stop()
+        UsageWindowProbeStore.shared.cancelAll()
+        AccountTokenUsageStore.shared.invalidateAll()
+        Task {
+            await accountStore.shutdown(timeout: 2)
+            await ProcessGroupTermination.shutdown()
+            await sessionActivityMonitor.stop()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     /// 진행 서비스 종료와 마지막 진단 이벤트의 최대 1초 디스크 기록 대기
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification

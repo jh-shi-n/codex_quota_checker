@@ -4,15 +4,22 @@ import Darwin
 import Foundation
 
 /// Foundation이 생성한 전용 그룹만 종료하는 공통 도구
- enum ProcessGroupTermination {
+public enum ProcessGroupTermination {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var groups = Set<pid_t>()
     /// 부모 앱과 분리된 그룹 ID의 실행 직후 확인
     static func group(of process: Process) -> pid_t? {
         let pid = process.processIdentifier
-        return pid > 1 && getpgid(pid) == pid && pid != getpgrp() ? pid : nil
+        guard pid > 1, getpgid(pid) == pid, pid != getpgrp() else { return nil }
+        lock.lock(); groups.insert(pid); lock.unlock()
+        return pid
     }
 
     /// wrapper 종료 이후에도 같은 그룹의 native 자식에 TERM·KILL 전달
     static func terminate(_ process: Process, group: pid_t?, until deadline: Date) {
+        defer {
+            if let group { lock.lock(); groups.remove(group); lock.unlock() }
+        }
         if let group { _ = kill(-group, SIGTERM) }
         else if process.isRunning { process.terminate() }
         let grace = min(deadline, Date().addingTimeInterval(0.25))
@@ -24,6 +31,20 @@ import Foundation
         if let group { _ = kill(-group, SIGKILL) }
         else if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
         while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
+    }
+
+    /// 종료 응답 전에 남은 probe·토큰·app-server 자식 그룹의 강제 정리 대기
+    public static func shutdown() async {
+        await Task.detached { shutdownSync() }.value
+    }
+
+    /// 동기 worker에서 종료 대상 그룹 스냅샷 정리
+    private static func shutdownSync() {
+        lock.lock(); let remaining = groups; lock.unlock()
+        for group in remaining { _ = kill(-group, SIGTERM) }
+        if !remaining.isEmpty { Thread.sleep(forTimeInterval: 0.25) }
+        for group in remaining { _ = kill(-group, SIGKILL) }
+        lock.lock(); groups.subtract(remaining); lock.unlock()
     }
 
     /// EOF를 보장하지 않는 상속 파이프의 제한시간·최대 바이트 비차단 읽기
