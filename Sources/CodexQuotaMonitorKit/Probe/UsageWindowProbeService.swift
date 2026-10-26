@@ -597,12 +597,14 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         guard !cancellation.isCancelled else { throw UsageWindowProbeProcessError.cancelled }
         do { try process.run() }
         catch { throw UsageWindowProbeProcessError.configurationFailure }
+        let catalogGroup = ProcessGroupTermination.group(of: process)
+        defer { terminate(process, group: catalogGroup) }
         try? output.fileHandleForWriting.close()
         try? errors.fileHandleForWriting.close()
         let deadline = ProcessInfo.processInfo.systemUptime + min(10, timeout)
         while ended.wait(timeout: .now() + 0.05) == .timedOut {
             if cancellation.isCancelled || ProcessInfo.processInfo.systemUptime >= deadline || collector.exceededLimit {
-                terminate(process, exitSignal: ended)
+                terminate(process, group: catalogGroup)
                 if cancellation.isCancelled { throw UsageWindowProbeProcessError.cancelled }
                 if collector.exceededLimit { throw UsageWindowProbeProcessError.configurationFailure }
                 throw UsageWindowProbeProcessError.timeout
@@ -744,20 +746,23 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
             }
             throw UsageWindowProbeProcessError.launchFailure
         }
-        // The parent must release its copies of the pipe write ends. Keeping
-        // them open would make the post-exit drain wait forever for EOF.
+        let processGroup = ProcessGroupTermination.group(of: process)
+        // 부모의 파이프 쓰기 사본 해제를 통한 EOF 지연 방지
         closeParentWritingHandles(inputPipe: inputPipe, outputPipe: outputPipe, errorPipe: errorPipe)
 
         let boundedTimeout = max(0.001, remainingTimeout)
         var didTimeout = false
         let waitResult = wakeSignal.wait(timeout: .now() + boundedTimeout)
         if cancellation.isCancelled {
-            terminateForCancellation(process, exitSignal: exitSignal)
+            terminate(process, group: processGroup)
         } else if waitResult == .timedOut {
             didTimeout = true
-            terminate(process, exitSignal: exitSignal)
+            terminate(process, group: processGroup)
         }
 
+        if !didTimeout && !cancellation.isCancelled {
+            terminate(process, group: processGroup)
+        }
         outputPipe.fileHandleForReading.readabilityHandler = nil
         errorPipe.fileHandleForReading.readabilityHandler = nil
         drain(outputPipe.fileHandleForReading, into: outputCollector)
@@ -789,27 +794,15 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         )
     }
 
-    private func terminate(_ process: Process, exitSignal: DispatchSemaphore) {
-        guard process.isRunning else { return }
-        process.terminate()
-        if exitSignal.wait(timeout: .now() + gracefulTerminationTimeout) == .timedOut,
-           process.isRunning {
-            _ = kill(process.processIdentifier, SIGKILL)
-            _ = exitSignal.wait(timeout: .now() + forcedTerminationTimeout)
-        }
+    /// wrapper와 native 자식 그룹의 제한시간 종료
+    private func terminate(_ process: Process, group: pid_t?) {
+        ProcessGroupTermination.terminate(process, group: group,
+            until: Date().addingTimeInterval(gracefulTerminationTimeout + forcedTerminationTimeout))
     }
 
-    /// 취소 wakeup 이후 유예 종료와 강제 종료를 순서대로 수행
-    private func terminateForCancellation(_ process: Process, exitSignal: DispatchSemaphore) {
-        terminate(process, exitSignal: exitSignal)
-    }
-
+    /// 상속된 쓰기 핸들이 남아 있어도 유한한 출력 회수
     private func drain(_ handle: FileHandle, into collector: BoundedDataCollector) {
-        while true {
-            let chunk = handle.readData(ofLength: 8 * 1_024)
-            guard !chunk.isEmpty else { return }
-            collector.append(chunk)
-        }
+        ProcessGroupTermination.drain(handle, limit: 4 * 1024 * 1024) { collector.append($0) }
     }
 
     private func close(pipe: Pipe) {
