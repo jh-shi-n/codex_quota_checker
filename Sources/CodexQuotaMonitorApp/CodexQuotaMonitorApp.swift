@@ -313,6 +313,26 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             return result
         }
 
+        AccountTokenUsageStore.shared.localTodayLoader = { [weak self] account in
+            guard let self,
+                  let config = self.accountStore.configs.first(where: { $0.id == account.id }),
+                  let home = config.configuredHome,
+                  self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
+                  self.accountStore.state(for: account.id)?.email == account.email else { return nil }
+            let task = Task.detached(priority: .utility) {
+                await LocalTokenUsageProvider(calendar: AccountTokenUsage.reportingCalendar, historyDayCount: 1).snapshot(home: home)
+            }
+            let snapshot = await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            guard self.accountStore.configs.first(where: { $0.id == account.id }) == config,
+                  self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
+                  self.accountStore.state(for: account.id)?.email == account.email else { return nil }
+            return snapshot
+        }
+
         let loadSessionActivity: SessionActivityLoader = { [weak self] account in
             guard let self else {
                 return .unavailable(accountID: account.id)
