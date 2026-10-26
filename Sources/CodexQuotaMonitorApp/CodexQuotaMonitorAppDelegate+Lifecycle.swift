@@ -12,6 +12,7 @@ extension CodexQuotaMonitorAppDelegate {
             .version: .identifier(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"),
             .build: .identifier(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"),
         ])
+        appUpdates.check(force: false)
         DiagnosticLogContext.recordCLIVersion()
         installWakeObserver()
         quotaResetNotifications.start()
@@ -46,6 +47,7 @@ extension CodexQuotaMonitorAppDelegate {
         UsageWindowProbeStore.shared.cancelAll()
         AccountTokenUsageStore.shared.invalidateAll()
         serviceStatus.cancel()
+        appUpdates.cancel()
         emptyAccountsPopover?.performClose(nil)
         emptyAccountsPopover = nil
         quotaSnapshotCleanupTask?.cancel()

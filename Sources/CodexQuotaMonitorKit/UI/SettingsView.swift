@@ -138,6 +138,7 @@ public struct SettingsView: View {
     private let onSendNotificationTest: () -> Void
     private let onOpenNotificationSettings: () -> Void
     private let onConnectAccount: () -> Void
+    private let appUpdateStore: AppUpdateStore?
 
     /// 목적: 배열형 경로와 설정 바인딩을 사용하는 화면 초기화
     /// 호환성: 새 계정 표시 바인딩은 기본값 제공
@@ -162,8 +163,10 @@ public struct SettingsView: View {
         onSendNotificationTest: @escaping () -> Void = {},
         onOpenNotificationSettings: @escaping () -> Void = {},
         tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions()),
-        onConnectAccount: @escaping () -> Void = {}
+        onConnectAccount: @escaping () -> Void = {},
+        appUpdateStore: AppUpdateStore? = nil
     ) {
+        self.appUpdateStore = appUpdateStore
         self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._automaticRefreshEnabled = automaticRefreshEnabled
@@ -219,8 +222,10 @@ public struct SettingsView: View {
         onSendNotificationTest: @escaping () -> Void = {},
         onOpenNotificationSettings: @escaping () -> Void = {},
         tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions()),
-        onConnectAccount: @escaping () -> Void = {}
+        onConnectAccount: @escaping () -> Void = {},
+        appUpdateStore: AppUpdateStore? = nil
     ) {
+        self.appUpdateStore = appUpdateStore
         self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._automaticRefreshEnabled = automaticRefreshEnabled
@@ -409,6 +414,8 @@ public struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                if let appUpdateStore { AppUpdateSettingsSection(store: appUpdateStore) }
+
                 Section {
                     if let launchAtLoginService {
                         LaunchAtLoginSettingsView(service: launchAtLoginService) { enabled in
@@ -474,7 +481,7 @@ public struct SettingsView: View {
 
     /// 설치 앱의 번들 버전 표시 및 소스 미리보기의 현재 릴리스 기본값
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.9"
+        AppVersion.current
     }
 
     private var refreshIntervalBinding: Binding<Int> {

@@ -6,6 +6,7 @@ import CodexQuotaMonitorKit
 
 extension CodexQuotaMonitorAppDelegate {
     func openSettings() {
+        appUpdates.check(force: false)
         synchronizeLaunchAtLoginStatus()
         quotaResetNotifications.refreshAuthorization()
         // Accessory apps can report `showSettingsWindow:` as handled without
@@ -117,7 +118,8 @@ extension CodexQuotaMonitorAppDelegate {
                     get: { [weak self] in self?.preferences.tokenUsageOptions ?? TokenUsageOptions() },
                     set: { [weak self] in self?.applyTokenUsageOptions($0) }
                 ),
-                onConnectAccount: { [weak self] in self?.openAccountSetup() }
+                onConnectAccount: { [weak self] in self?.openAccountSetup() },
+                appUpdateStore: self.appUpdates
             )
             .safeAreaInset(edge: .top) { StorageStatusView(preferences: store) }
         }
