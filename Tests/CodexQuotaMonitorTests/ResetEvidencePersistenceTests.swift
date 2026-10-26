@@ -26,7 +26,8 @@ final class ResetEvidencePersistenceTests: XCTestCase {
         store.observationUptime = { 10 }
         await store.refresh(accountID: "C2", forceFresh: true)
         XCTAssertNotNil(fixture.preferences.quotaSnapshot(for: fixture.configs[1].home)?.primaryResetEvidence)
-        XCTAssertEqual(fixture.store(returning: states[1]).state(for: "C2")?.primaryResetObservation, .stableObserved)
+        let restarted = await fixture.store(returning: states[1])
+        XCTAssertEqual(restarted.state(for: "C2")?.primaryResetObservation, .stableObserved)
     }
 
     /// 고정 근거 복원과 첫 동일 응답의 관측 유지 및 다음 재실행 복원 검증
@@ -37,7 +38,7 @@ final class ResetEvidencePersistenceTests: XCTestCase {
         let now = Date()
         let account = AccountState(id: "C2", email: "fixture@example.invalid", planType: "plus",
             primaryResetAt: fixture.reset, lastUpdated: now, status: .normal)
-        let store = fixture.store(returning: account)
+        let store = await fixture.store(returning: account)
         let restored = try XCTUnwrap(store.state(for: "C2"))
         XCTAssertEqual(restored.primaryResetObservation, .stableObserved)
         XCTAssertEqual(AccountDashboardFormatting.observedResetDate(restored.primaryResetAt,
@@ -45,7 +46,7 @@ final class ResetEvidencePersistenceTests: XCTestCase {
         store.observationNow = { now }
         await store.refresh(accountID: "C2", forceFresh: true)
         XCTAssertEqual(store.state(for: "C2")?.primaryResetObservation, .stableObserved)
-        let reloaded = fixture.store(returning: account)
+        let reloaded = await fixture.store(returning: account)
         XCTAssertEqual(reloaded.state(for: "C2")?.primaryResetEvidence?.resetAt, fixture.reset)
         XCTAssertEqual(reloaded.state(for: "C2")?.email, account.email)
     }
@@ -62,7 +63,7 @@ final class ResetEvidencePersistenceTests: XCTestCase {
                 planType: change == "plan" ? "pro" : "plus",
                 primaryResetAt: fixture.reset.addingTimeInterval(change == "reset" ? 300 : 0),
                 lastUpdated: now, status: .normal)
-            let store = fixture.store(returning: account)
+            let store = await fixture.store(returning: account)
             store.observationNow = { now }
             await store.refresh(accountID: "C2", forceFresh: true)
             XCTAssertEqual(store.state(for: "C2")?.primaryResetObservation, .checking)
@@ -71,7 +72,7 @@ final class ResetEvidencePersistenceTests: XCTestCase {
     }
 
     /// 만료·미래 관측·다른 시각의 근거와 이전 버전 캐시의 확정 표시 차단
-    func testInvalidOrMissingEvidenceDoesNotRestoreStability() throws {
+    func testInvalidOrMissingEvidenceDoesNotRestoreStability() async throws {
         let fixture = try EvidenceFixture()
         defer { fixture.cleanup() }
         let now = Date()
@@ -80,7 +81,7 @@ final class ResetEvidencePersistenceTests: XCTestCase {
             ResetTimeEvidence(resetAt: fixture.reset, observedAt: now.addingTimeInterval(60)),
             ResetTimeEvidence(resetAt: fixture.reset.addingTimeInterval(300), observedAt: now)] {
             fixture.saveEvidence(evidence)
-            let store = fixture.store(returning: AccountState(id: "C2", status: .normal))
+            let store = await fixture.store(returning: AccountState(id: "C2", status: .normal))
             XCTAssertEqual(store.state(for: "C2")?.primaryResetObservation, .checking)
             XCTAssertNil(store.state(for: "C2")?.primaryResetEvidence)
         }
@@ -117,9 +118,11 @@ private final class EvidenceFixture {
     }
 
     /// SQLite를 새 설정 객체로 다시 읽고 모의 응답 연결
-    func store(returning account: AccountState) -> AccountStore {
+    func store(returning account: AccountState) async -> AccountStore {
+        await preferences.waitForCacheIO()
         let reloaded = PreferencesStore(userDefaults: defaults, defaultPaths: configs.map { $0.home.path },
             quotaDatabaseURL: root.appendingPathComponent("quota.sqlite"))
+        await reloaded.waitForCacheIO()
         return AccountStore(configs: configs, preferencesStore: reloaded) { _ in account }
     }
 

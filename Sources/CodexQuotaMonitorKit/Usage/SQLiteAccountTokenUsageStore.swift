@@ -5,8 +5,7 @@ import Foundation
 import SQLite3
 
 /// 인증 정보·세션 내용 없이 서버 요약과 일별 사용량만 보관하는 저장소
-@MainActor
-final class SQLiteAccountTokenUsageStore {
+final class SQLiteAccountTokenUsageStore: Sendable {
     private let databaseURL: URL
     static let lifetime = SQLiteQuotaSnapshotStore.lifetime
 
@@ -15,15 +14,15 @@ final class SQLiteAccountTokenUsageStore {
 
     /// 연결과 스키마 생성 후 SQL 작업의 오류 전달
     private func withDatabase<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
-        try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PrivateSQLiteFiles.prepare(databaseURL)
         var pointer: OpaquePointer?
         let result = sqlite3_open_v2(databaseURL.path, &pointer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
         guard result == SQLITE_OK, let db = pointer else {
             if let pointer { sqlite3_close(pointer) }
             throw CocoaError(.fileWriteUnknown)
         }
-        defer { sqlite3_close(db) }
-        sqlite3_busy_timeout(db, 5_000)
+        defer { sqlite3_close(db); try? PrivateSQLiteFiles.secureExisting(databaseURL) }
+        sqlite3_busy_timeout(db, 250)
         guard sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS account_token_usage_snapshots (home_identity TEXT PRIMARY KEY, snapshot BLOB NOT NULL, updated_at REAL NOT NULL)", nil, nil, nil) == SQLITE_OK else {
             throw CocoaError(.fileWriteUnknown)
         }

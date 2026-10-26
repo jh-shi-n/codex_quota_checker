@@ -171,10 +171,7 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
     /// 데이터베이스 연결 생성·종료와 작업 실행
     private func withDatabase<T>(_ body: (OpaquePointer) -> T?) -> T? {
         do {
-            try FileManager.default.createDirectory(
-                at: databaseURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+            try PrivateSQLiteFiles.prepare(databaseURL)
         } catch {
             return nil
         }
@@ -190,8 +187,8 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
             if let database { sqlite3_close(database) }
             return nil
         }
-        defer { sqlite3_close(database) }
-        guard sqlite3_busy_timeout(database, 5_000) == SQLITE_OK,
+        defer { sqlite3_close(database); try? PrivateSQLiteFiles.secureExisting(databaseURL) }
+        guard sqlite3_busy_timeout(database, 250) == SQLITE_OK,
               ensureSchema(database) else {
             return nil
         }

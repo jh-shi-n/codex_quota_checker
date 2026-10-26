@@ -2,11 +2,107 @@
 // 이용처: 사용자 앱·계정 데이터와 분리된 앱 내 업데이트 회귀 테스트
 // 사용방법: swift test --filter AppUpdateInstallerTests
 import CryptoKit
+import Darwin
 import XCTest
 @testable import CodexQuotaMonitorKit
 
 /// 임시 서명 앱과 실제 보조 스크립트의 파일 작업 검증
 final class AppUpdateInstallerTests: XCTestCase {
+    /// 같은 metadata SHA로 바꾼 ZIP도 고정 서명키 없이는 설치 불가 검증
+    func testIndependentReleaseSignatureRejectsTamperingAndOtherKeys() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archive = root.appendingPathComponent("release.zip")
+        let bytes = Data("signed release fixture".utf8)
+        try bytes.write(to: archive)
+        let key = Curve25519.Signing.PrivateKey()
+        let signature = try key.signature(for: Data(SHA256.hash(data: bytes)))
+        XCTAssertNoThrow(try AppUpdateInstaller.verifyReleaseSignature(archive, signature: signature, publicKey: key.publicKey.rawRepresentation))
+        XCTAssertThrowsError(try AppUpdateInstaller.verifyReleaseSignature(archive, signature: signature))
+        try Data("attacker archive".utf8).write(to: archive)
+        XCTAssertThrowsError(try AppUpdateInstaller.verifyReleaseSignature(archive, signature: signature, publicKey: key.publicKey.rawRepresentation))
+    }
+
+    /// 실제 자식 실행의 제한시간과 취소 시 그룹 종료 검증
+    func testValidationSubprocessHasDeadlineAndCancellation() async throws {
+        let started = Date()
+        XCTAssertThrowsError(try AppUpdateInstaller.run("/bin/sh", ["-c", "trap '' TERM; sleep 60"], timeout: 0.05))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        let task = Task.detached { try AppUpdateInstaller.run("/bin/sleep", ["60"]) }
+        try await Task.sleep(for: .milliseconds(30))
+        task.cancel()
+        do { _ = try await task.value; XCTFail("취소 미전파") }
+        catch is CancellationError { }
+    }
+
+    /// 실제 ditto ZIP의 선언 총량·항목수·local/central 불일치 사전 차단 검증
+    func testArchiveLimitsAndLocalHeaderMismatchAreRejected() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        let archive = fixture.root.appendingPathComponent("update.zip")
+        try fixture.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", fixture.candidate.path, archive.path])
+        let destination = fixture.root.appendingPathComponent("limit-extracted")
+        XCTAssertThrowsError(try BoundedZipExtractor.extract(archive, to: destination, maximumBytes: 10))
+        XCTAssertThrowsError(try BoundedZipExtractor.extract(archive, to: destination, maximumCount: 1))
+        var bytes = try Data(contentsOf: archive)
+        bytes[8] = bytes[8] == 0 ? 8 : 0
+        try bytes.write(to: archive)
+        XCTAssertThrowsError(try BoundedZipExtractor.extract(archive, to: destination))
+    }
+
+    /// ZIP 내 심볼릭 링크의 추출 전 거부 검증
+    func testArchiveSymlinkIsRejectedBeforeExtraction() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        try FileManager.default.createSymbolicLink(at: fixture.candidate.appendingPathComponent("Contents/link"), withDestinationURL: fixture.userData)
+        let archive = fixture.root.appendingPathComponent("link.zip")
+        try fixture.run("/usr/bin/ditto", ["-c", "-k", "--keepParent", fixture.candidate.path, archive.path])
+        let destination = fixture.root.appendingPathComponent("no-extraction")
+        XCTAssertThrowsError(try BoundedZipExtractor.extract(archive, to: destination))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    /// Content-Length가 없는 응답의 실제 수신 초과·불완전 전송 차단 검증
+    func testStreamingDownloadRejectsOversizedAndIncompleteBodies() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UpdateDownloadURLProtocol.self]
+        for (index, count) in [80, 10, 64].enumerated() {
+            UpdateDownloadURLProtocol.payload = Data(repeating: 1, count: count)
+            let session = URLSession(configuration: configuration)
+            let destination = root.appendingPathComponent("download-\(index)")
+            do {
+                try await AppUpdateInstaller.download(URL(string: "https://update.test/release")!, to: destination,
+                    maximumBytes: 64, expectedSize: 64, session: session)
+                XCTAssertEqual(count, 64)
+            } catch {
+                XCTAssertNotEqual(count, 64)
+            }
+            let size = try destination.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            XCTAssertLessThanOrEqual(size, 64)
+        }
+    }
+
+    /// 패키징 스크립트 산출 ZIP·독립 서명·리소스 번들·codesign 통합 검증
+    func testPackagedReleaseArchiveWhenProvided() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["CODEX_UPDATE_ARCHIVE_SMOKE"] else { throw XCTSkip("배포 ZIP 경로 미지정") }
+        let archive = URL(fileURLWithPath: path)
+        let signature = try Data(contentsOf: URL(fileURLWithPath: path + ".sig"))
+        try AppUpdateInstaller.verifyReleaseSignature(archive, signature: signature)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CodexQuotaChecker-update-smoke-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let version = environment["CODEX_UPDATE_ARCHIVE_VERSION"] ?? "0.1.0"
+        let prepared = try AppUpdateInstaller.unpack(archive, directory: directory, version: version, installedVersion: "0.0.0")
+        let resources = prepared.app.appendingPathComponent("Contents/Resources/CodexQuotaMonitor_CodexQuotaMonitorKit.bundle")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resources.path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: prepared.app.appendingPathComponent("Contents/MacOS/CodexQuotaMonitor").path))
+    }
+
     /// 정상 SHA-256 허용과 파일 변조·크기 불일치·검증 정보 누락 차단 검증
     func testDownloadRequiresCorrectSizeAndDigest() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -43,6 +139,14 @@ final class AppUpdateInstallerTests: XCTestCase {
         XCTAssertThrowsError(try AppUpdateInstaller.validateApp(prepared.app, expectedVersion: "0.1.0", installedVersion: "0.0.9"))
     }
 
+    /// ps와 준비 신호를 대체하지 않은 실제 native 프로세스의 교체 승인 검증
+    func testHelperAcceptsReadinessFromRealNativeProcess() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        XCTAssertEqual(try fixture.executeHelperWithRealProcess(), 0)
+        XCTAssertEqual(try fixture.version(fixture.target), "0.1.0")
+    }
+
     /// 실제 교체 성공 뒤 신규 앱 유지·구버전 제거·사용자 데이터 보존 검증
     func testHelperReplacesAppAndCleansBackup() throws {
         let fixture = try InstallerFixture()
@@ -74,6 +178,18 @@ final class AppUpdateInstallerTests: XCTestCase {
         defer { fixture.cleanup() }
         XCTAssertNotEqual(try fixture.executeHelper(failOpen: false, showProcess: false), 0)
         XCTAssertEqual(try fixture.version(fixture.target), "0.0.9")
+    }
+
+    /// 프로세스가 보여도 앱 준비 신호가 없으면 원본 복원과 다음 실행 실패 전달 검증
+    func testHelperRestoresWhenReadinessNeverArrivesAndRetainsResult() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        XCTAssertNotEqual(try fixture.executeHelper(failOpen: false, emitReadiness: false), 0)
+        XCTAssertEqual(try fixture.version(fixture.target), "0.0.9")
+        let directory = fixture.root.appendingPathComponent("UpdateState")
+        XCTAssertNotNil(AppUpdateState.consumeFailure(directory: directory))
+        XCTAssertNil(AppUpdateState.consumeFailure(directory: directory))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.workspace.path))
     }
 
     /// 기존 앱이 종료되지 않으면 원본 교체 없이 종료 검증
@@ -130,19 +246,86 @@ private final class InstallerFixture {
     }
 
     /// 실제 보조 스크립트를 소싱하되 open·프로세스 목록·대기만 테스트 경계로 교체
-    func executeHelper(failOpen: Bool, showProcess: Bool = true, oldProcessAlive: Bool = false) throws -> Int32 {
+    func executeHelper(failOpen: Bool, showProcess: Bool = true, oldProcessAlive: Bool = false, emitReadiness: Bool = true) throws -> Int32 {
         let helper = try XCTUnwrap(AppUpdateInstaller.helperURL)
+        let stateDirectory = root.appendingPathComponent("UpdateState")
+        let state = try AppUpdateState.begin(version: "0.1.0", target: target, directory: stateDirectory)
+        let readiness: [String: Any] = ["nonce": state.nonce, "version": "0.1.0", "target": target.path,
+            "executable": target.appendingPathComponent("Contents/MacOS/CodexQuotaMonitor").path, "pid": 2147483646]
+        try JSONSerialization.data(withJSONObject: readiness).write(to: stateDirectory.appendingPathComponent("template.json"))
         let script = """
-        function /usr/bin/open() { return \(failOpen ? 1 : 0); }
-        function /bin/ps() { \(showProcess ? "builtin print -r -- \"$$ $target_app/Contents/MacOS/CodexQuotaMonitor\"" : "return 0"); }
-        function /bin/sleep() { return 0; }
-        \(oldProcessAlive ? "function kill() { return 0; }" : "")
+        function /usr/bin/open() {
+            \(failOpen ? "return 1" : "")
+            if [[ "$1" == "-n" && "\(emitReadiness ? "yes" : "no")" == "yes" ]]; then
+                /bin/cp "$state_directory/template.json" "$ready"
+            fi
+            return 0
+        }
+        function /bin/ps() {
+            \(showProcess ? "if [[ \"$1\" == \"-p\" ]]; then builtin print -r -- \"$executable\"; else builtin print -r -- \"2147483646 $executable\"; fi" : "return 0")
+        }
+        function /bin/sleep() { command /bin/sleep 0.001; }
+        function kill() {
+            \(oldProcessAlive ? "return 0" : "if [[ \"$2\" == \"2147483646\" ]]; then return 0; fi; builtin kill \"$@\"")
+        }
         source "$1" "${@:2}"
         """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-f", "-c", script, "test-helper", helper.path, "2147483647", target.path,
-            candidate.path, workspace.path, "0.1.0"]
+            candidate.path, workspace.path, "0.1.0", stateDirectory.path, state.nonce]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    /// GUI 실행 진입점만 실제 native fixture 실행으로 연결하는 통합 검증
+    func executeHelperWithRealProcess() throws -> Int32 {
+        let source = root.appendingPathComponent("readiness.c")
+        let code = #"""
+        #include <stdio.h>
+        #include <unistd.h>
+        #include <limits.h>
+        int main(int argc, char **argv) {
+            if (argc != 4) return 2;
+            char ready[PATH_MAX], marker[PATH_MAX];
+            snprintf(ready, sizeof(ready), "%s/ready-%s.json", argv[2], argv[1]);
+            snprintf(marker, sizeof(marker), "%s/child.pid", argv[2]);
+            FILE *pidfile = fopen(marker, "w");
+            fprintf(pidfile, "%d", getpid()); fclose(pidfile);
+            FILE *file = fopen(ready, "w");
+            fprintf(file, "{\"nonce\":\"%s\",\"version\":\"0.1.0\",\"target\":\"%s\",\"executable\":\"%s/Contents/MacOS/CodexQuotaMonitor\",\"pid\":%d}", argv[1], argv[3], argv[3], getpid());
+            fclose(file);
+            sleep(60);
+            return 0;
+        }
+        """#
+        try code.write(to: source, atomically: true, encoding: .utf8)
+        let executable = candidate.appendingPathComponent("Contents/MacOS/CodexQuotaMonitor")
+        try run("/usr/bin/clang", [source.path, "-o", executable.path])
+        try run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", candidate.path])
+        let stateDirectory = root.appendingPathComponent("RealUpdateState")
+        let request = try AppUpdateState.begin(version: "0.1.0", target: target, directory: stateDirectory)
+        defer {
+            if let text = try? String(contentsOf: stateDirectory.appendingPathComponent("child.pid"), encoding: .utf8), let pid = Int32(text) {
+                _ = kill(pid, SIGKILL)
+            }
+        }
+        let script = """
+        function /usr/bin/open() {
+            if [[ "$1" == "-n" ]]; then
+                "$target_app/Contents/MacOS/CodexQuotaMonitor" "$nonce" "$state_directory" "$target_app" &
+            fi
+            return 0
+        }
+        source "$1" "${@:2}"
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-f", "-c", script, "real-helper", try XCTUnwrap(AppUpdateInstaller.helperURL).path,
+            "2147483647", target.path, candidate.path, workspace.path, "0.1.0", stateDirectory.path, request.nonce]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
@@ -171,4 +354,23 @@ private final class InstallerFixture {
 
     /// 임시 앱·사용자 데이터 fixture 제거
     func cleanup() { try? FileManager.default.removeItem(at: root) }
+}
+
+/// 무제한 Content-Length 응답을 재현하는 다운로드 전용 경계
+private final class UpdateDownloadURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var payload = Data()
+
+    /// 테스트 전용 HTTPS 요청 처리 허용
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    /// 요청 URL의 원형 유지
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    /// 길이 헤더 없는 body 전달
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.payload)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    /// 동기 fixture 완료 이후 추가 정리 없음
+    override func stopLoading() { }
 }

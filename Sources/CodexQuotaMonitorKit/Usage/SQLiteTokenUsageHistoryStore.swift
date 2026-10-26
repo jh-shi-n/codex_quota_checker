@@ -150,12 +150,11 @@ final class SQLiteTokenUsageHistoryStore: @unchecked Sendable {
 
     /// 제한된 잠금 대기와 사용자 전용 권한을 적용하는 DB 연결
     private func withDatabase<T>(_ operation: (OpaquePointer) throws -> T) throws -> T {
-        try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                               attributes: [.posixPermissions: 0o700])
+        try PrivateSQLiteFiles.prepare(databaseURL)
         var pointer: OpaquePointer?
         guard sqlite3_open_v2(databaseURL.path, &pointer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
               let db = pointer else { if let pointer { sqlite3_close(pointer) }; throw Failure.operationFailed }
-        defer { sqlite3_close(db) }
+        defer { sqlite3_close(db); try? PrivateSQLiteFiles.secureExisting(databaseURL) }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
         guard sqlite3_busy_timeout(db, 250) == SQLITE_OK else { throw Failure.operationFailed }
         try execute(db, "PRAGMA auto_vacuum = INCREMENTAL")

@@ -41,6 +41,7 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
 
     private let inheritedEnvironment: [String: String]
     private var process: Process?
+    private var processGroup: pid_t?
     private var inputPipe: Pipe?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
@@ -100,6 +101,10 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
 
         do {
             try process.run()
+            processGroup = ProcessGroupTermination.group(of: process)
+            try? inputPipe.fileHandleForReading.close()
+            try? outputPipe.fileHandleForWriting.close()
+            try? errorPipe.fileHandleForWriting.close()
             outputPipe.fileHandleForReading.readabilityHandler = { [weak self] _ in
                 self?.wakeSignal.signal()
             }
@@ -216,21 +221,11 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
     public func terminate(until deadline: Date) {
         guard !resourcesCleanedUp else { return }
 
-        if let process, process.isRunning {
-            process.terminate()
-            waitForExit(process, until: min(
-                deadline,
-                Date().addingTimeInterval(Self.gracefulTerminationTimeout)
-            ))
-
-            if process.isRunning {
-                _ = kill(process.processIdentifier, SIGKILL)
-                waitForExit(process, until: min(
-                    deadline,
-                    Date().addingTimeInterval(Self.forcedTerminationTimeout)
-                ))
-            }
+        if let process {
+            ProcessGroupTermination.terminate(process, group: processGroup,
+                until: max(deadline, Date().addingTimeInterval(Self.forcedTerminationTimeout)))
         }
+        processGroup = nil
 
         cleanupResources()
         process = nil

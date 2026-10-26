@@ -29,12 +29,35 @@ extension CodexQuotaMonitorAppDelegate {
         }
         synchronizeLaunchAtLoginStatus()
         quotaResetNotifications.refreshAuthorization()
+        AppUpdateState.publishReadiness()
     }
 
     /// 시스템 설정에서 앱으로 복귀할 때 자동실행 승인 상태 재확인
     func applicationDidBecomeActive(_ notification: Notification) {
         _ = notification
         synchronizeLaunchAtLoginStatus()
+    }
+
+    /// 종료 응답을 지연해 비동기 조회 취소와 native 자식 정리에 최대 2초 제공
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        quotaMonitoring.stop()
+        UsageWindowProbeStore.shared.cancelAll()
+        AccountTokenUsageStore.shared.invalidateAll()
+        let reply = AppTerminationReplyGate(sender)
+        Task {
+            await accountStore.shutdown(timeout: 2)
+            await ProcessGroupTermination.shutdown()
+            await sessionActivityMonitor.stop()
+            await preferences.waitForCacheIO()
+            await AccountTokenUsageStore.shared.waitForPersistence()
+            reply.finish()
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            await ProcessGroupTermination.shutdown()
+            reply.finish()
+        }
+        return .terminateLater
     }
 
     /// 진행 서비스 종료와 마지막 진단 이벤트의 최대 1초 디스크 기록 대기
@@ -95,5 +118,22 @@ extension CodexQuotaMonitorAppDelegate {
                 }
             }
         }
+    }
+}
+
+/// 정상 정리와 종료 제한시간 경쟁에서 AppKit 종료 응답의 단일 전달
+@MainActor
+private final class AppTerminationReplyGate {
+    private let application: NSApplication
+    private var finished = false
+
+    /// 종료 요청 대상 앱 보관
+    init(_ application: NSApplication) { self.application = application }
+
+    /// 먼저 완료된 종료 경로에서만 응답 전달
+    func finish() {
+        guard !finished else { return }
+        finished = true
+        application.reply(toApplicationShouldTerminate: true)
     }
 }
