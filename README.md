@@ -5,6 +5,24 @@
 - macOS 메뉴 막대·노치에서 최대 4개 Codex 계정의 할당량과 사용량 확인
 - Codex로 제작한 비공식 독립 앱
 
+## 화면 미리보기
+
+- 현재 구현된 UI에 예시 계정·사용량을 넣어 캡처한 화면
+
+### 메뉴 막대·노치 계정 표시
+
+<img src="assets/screenshots/quota-cluster.png" alt="두 계정의 할당량 잔여율과 이름을 표시하는 계정 도넛" width="220">
+
+### 계정 상세
+
+- 5시간·전체 할당량, 최근 24주 토큰 사용량, 세션 실행 기록 및 초기화 시간 설정
+
+<img src="assets/screenshots/account-detail.png" alt="계정별 할당량과 토큰 사용량 잔디를 표시하는 상세 화면" width="640">
+
+### 설정
+
+<img src="assets/screenshots/settings.png" alt="자동 새로고침 간격과 계정 연결 경로를 설정하는 화면" width="640">
+
 ## 주요 기능
 
 | 기능 | 설명 |
