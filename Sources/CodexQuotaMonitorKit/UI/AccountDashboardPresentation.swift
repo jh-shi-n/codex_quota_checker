@@ -107,7 +107,7 @@ public enum AccountDashboardFormatting {
         guard let resetAt, resetAt.timeIntervalSince1970.isFinite else { return "초기화 시각 미확인" }
         guard resetAt > now else { return "초기화 시각 재확인 필요" }
         switch observation {
-        case .stableObserved: return "고정 관측"
+        case .stableObserved: return "할당량 시간 고정"
         case .movingObserved: return "초기화 시각 변동 중"
         case .checking: return "초기화 시각 확인 중"
         }

@@ -11,7 +11,7 @@ public enum ResetTimeConfirmationStatus: String, Equatable, Sendable {
     public var text: String {
         switch self {
         case .checking: "확인 중"
-        case .stableObserved: "고정 관측"
+        case .stableObserved: "할당량 시간 고정"
         case .movingObserved: "변동 중"
         case .unavailable: "조회 미확인"
         case .superseded: "새 구간 재관측"

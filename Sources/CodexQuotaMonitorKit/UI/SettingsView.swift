@@ -380,7 +380,7 @@ public struct SettingsView: View {
                         Text("5분 전").tag(5)
                         Text("3분 전").tag(3)
                     }
-                    Text("안정 관측된 초기화 시각에 다시 조회하고 도달 알림을 보냅니다. 사전 알림을 꺼도 도달 알림은 유지됩니다.")
+                    Text("할당량 시간이 고정되면 해당 시각에 다시 조회하고 도달 알림을 보냅니다. 사전 알림을 꺼도 도달 알림은 유지됩니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 5) {
