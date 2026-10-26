@@ -7,6 +7,84 @@ import XCTest
 
 /// 임시 서명 앱과 실제 보조 스크립트의 파일 작업 검증
 final class AppUpdateInstallerTests: XCTestCase {
+    /// 같은 metadata SHA로 바꾼 ZIP도 고정 서명키 없이는 설치 불가 검증
+    func testIndependentReleaseSignatureRejectsTamperingAndOtherKeys() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archive = root.appendingPathComponent("release.zip")
+        let bytes = Data("signed release fixture".utf8)
+        try bytes.write(to: archive)
+        let key = Curve25519.Signing.PrivateKey()
+        let signature = try key.signature(for: Data(SHA256.hash(data: bytes)))
+        XCTAssertNoThrow(try AppUpdateInstaller.verifyReleaseSignature(archive, signature: signature, publicKey: key.publicKey.rawRepresentation))
+        XCTAssertThrowsError(try AppUpdateInstaller.verifyReleaseSignature(archive, signature: signature))
+        try Data("attacker archive".utf8).write(to: archive)
+        XCTAssertThrowsError(try AppUpdateInstaller.verifyReleaseSignature(archive, signature: signature, publicKey: key.publicKey.rawRepresentation))
+    }
+
+    /// 실제 자식 실행의 제한시간과 취소 시 그룹 종료 검증
+    func testValidationSubprocessHasDeadlineAndCancellation() async throws {
+        let started = Date()
+        XCTAssertThrowsError(try AppUpdateInstaller.run("/bin/sh", ["-c", "trap '' TERM; sleep 60"], timeout: 0.05))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        let task = Task.detached { try AppUpdateInstaller.run("/bin/sleep", ["60"]) }
+        try await Task.sleep(for: .milliseconds(30))
+        task.cancel()
+        do { _ = try await task.value; XCTFail("취소 미전파") }
+        catch is CancellationError { }
+    }
+
+    /// 실제 ditto ZIP의 선언 총량·항목수·local/central 불일치 사전 차단 검증
+    func testArchiveLimitsAndLocalHeaderMismatchAreRejected() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        let archive = fixture.root.appendingPathComponent("update.zip")
+        try fixture.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", fixture.candidate.path, archive.path])
+        let destination = fixture.root.appendingPathComponent("limit-extracted")
+        XCTAssertThrowsError(try BoundedZipExtractor.extract(archive, to: destination, maximumBytes: 10))
+        XCTAssertThrowsError(try BoundedZipExtractor.extract(archive, to: destination, maximumCount: 1))
+        var bytes = try Data(contentsOf: archive)
+        bytes[8] = bytes[8] == 0 ? 8 : 0
+        try bytes.write(to: archive)
+        XCTAssertThrowsError(try BoundedZipExtractor.extract(archive, to: destination))
+    }
+
+    /// ZIP 내 심볼릭 링크의 추출 전 거부 검증
+    func testArchiveSymlinkIsRejectedBeforeExtraction() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        try FileManager.default.createSymbolicLink(at: fixture.candidate.appendingPathComponent("Contents/link"), withDestinationURL: fixture.userData)
+        let archive = fixture.root.appendingPathComponent("link.zip")
+        try fixture.run("/usr/bin/ditto", ["-c", "-k", "--keepParent", fixture.candidate.path, archive.path])
+        let destination = fixture.root.appendingPathComponent("no-extraction")
+        XCTAssertThrowsError(try BoundedZipExtractor.extract(archive, to: destination))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    /// Content-Length가 없는 응답의 실제 수신 초과·불완전 전송 차단 검증
+    func testStreamingDownloadRejectsOversizedAndIncompleteBodies() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UpdateDownloadURLProtocol.self]
+        for (index, count) in [80, 10, 64].enumerated() {
+            UpdateDownloadURLProtocol.payload = Data(repeating: 1, count: count)
+            let session = URLSession(configuration: configuration)
+            let destination = root.appendingPathComponent("download-\(index)")
+            do {
+                try await AppUpdateInstaller.download(URL(string: "https://update.test/release")!, to: destination,
+                    maximumBytes: 64, expectedSize: 64, session: session)
+                XCTAssertEqual(count, 64)
+            } catch {
+                XCTAssertNotEqual(count, 64)
+            }
+            let size = try destination.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            XCTAssertLessThanOrEqual(size, 64)
+        }
+    }
+
     /// 정상 SHA-256 허용과 파일 변조·크기 불일치·검증 정보 누락 차단 검증
     func testDownloadRequiresCorrectSizeAndDigest() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -171,4 +249,23 @@ private final class InstallerFixture {
 
     /// 임시 앱·사용자 데이터 fixture 제거
     func cleanup() { try? FileManager.default.removeItem(at: root) }
+}
+
+/// 무제한 Content-Length 응답을 재현하는 다운로드 전용 경계
+private final class UpdateDownloadURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var payload = Data()
+
+    /// 테스트 전용 HTTPS 요청 처리 허용
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    /// 요청 URL의 원형 유지
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    /// 길이 헤더 없는 body 전달
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.payload)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    /// 동기 fixture 완료 이후 추가 정리 없음
+    override func stopLoading() { }
 }

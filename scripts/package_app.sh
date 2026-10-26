@@ -2,7 +2,7 @@
 # 목적: 빌드 진행 표시와 서명된 macOS 앱 패키징·교체
 # 이용처: 로컬 설치 및 릴리스 배포본 생성
 # 사용방법: --output으로 앱 번들 또는 출력 폴더 지정
-# 실행 예시: ./scripts/package_app.sh --output /Applications/CodexQuotaChecker.app
+# 실행 예시: ./scripts/package_app.sh --output /tmp/codex-release
 set -euo pipefail
 
 script_dir="${0:A:h}"

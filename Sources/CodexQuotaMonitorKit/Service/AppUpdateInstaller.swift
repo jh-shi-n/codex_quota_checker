@@ -41,18 +41,22 @@ public enum AppUpdateInstaller {
         guard let asset = release.asset, asset.size > 0, asset.size <= 200_000_000,
               GitHubAppReleaseClient.isRepositoryURL(asset.url, prefix: "/releases/download/") else { throw AppUpdateInstallError.missingAsset }
         guard validDigest(asset.digest) else { throw AppUpdateInstallError.invalidDigest }
-        let request = URLRequest(url: asset.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 120)
-        let (download, response) = try await URLSession.shared.download(for: request)
-        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else { throw AppUpdateInstallError.invalidDownload }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CodexQuotaChecker-update-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         do {
             let archive = directory.appendingPathComponent("update.zip")
-            try FileManager.default.moveItem(at: download, to: archive)
-            return try await Task.detached {
+            try await download(asset.url, to: archive, maximumBytes: min(Int64(BoundedZipExtractor.maximumArchiveBytes), asset.size), expectedSize: asset.size)
+            let signatureURL = URL(string: asset.url.absoluteString + ".sig")!
+            let signatureFile = directory.appendingPathComponent("update.zip.sig")
+            try await download(signatureURL, to: signatureFile, maximumBytes: 64, expectedSize: 64)
+            let task = Task.detached {
                 try validateDownload(archive, asset: asset)
+                try verifyReleaseSignature(archive, signature: Data(contentsOf: signatureFile))
                 return try unpack(archive, directory: directory, version: release.version, installedVersion: installedVersion)
-            }.value
+            }
+            return try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
         } catch {
             try? FileManager.default.removeItem(at: directory)
             throw error
@@ -63,26 +67,22 @@ public enum AppUpdateInstaller {
     public static func validateDownload(_ archive: URL, asset: AppReleaseAsset) throws {
         guard validDigest(asset.digest), let digest = asset.digest else { throw AppUpdateInstallError.invalidDigest }
         let size = try archive.resourceValues(forKeys: [.fileSizeKey]).fileSize
-        guard size.map(Int64.init) == asset.size else { throw AppUpdateInstallError.invalidDownload }
+        guard let size, size <= BoundedZipExtractor.maximumArchiveBytes, Int64(size) == asset.size else { throw AppUpdateInstallError.invalidDownload }
         let handle = try FileHandle(forReadingFrom: archive)
         defer { try? handle.close() }
         var hash = SHA256()
-        while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty { hash.update(data: chunk) }
+        while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
+            try Task.checkCancellation()
+            hash.update(data: chunk)
+        }
         let actual = hash.finalize().map { String(format: "%02x", $0) }.joined()
         guard "sha256:\(actual)" == digest.lowercased() else { throw AppUpdateInstallError.invalidDownload }
     }
 
     /// 압축 경로와 번들 구조·식별자·버전·서명 검증
     public static func unpack(_ archive: URL, directory: URL, version: String, installedVersion: String) throws -> PreparedAppUpdate {
-        let list = try run("/usr/bin/zipinfo", ["-1", archive.path])
-        guard !list.isEmpty, list.split(separator: "\n").allSatisfy({ entry in
-            let parts = entry.split(separator: "/", omittingEmptySubsequences: true)
-            return !entry.hasPrefix("/") && !entry.contains("\\") && !parts.contains("..")
-                && (parts.first == Substring(appName) || parts.first == "__MACOSX")
-        }) else { throw AppUpdateInstallError.invalidArchive }
         let extracted = directory.appendingPathComponent("extracted")
-        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: false)
-        _ = try run("/usr/bin/ditto", ["-x", "-k", archive.path, extracted.path])
+        try BoundedZipExtractor.extract(archive, to: extracted)
         let app = extracted.appendingPathComponent(appName)
         try validateApp(app, expectedVersion: version, installedVersion: installedVersion)
         return PreparedAppUpdate(directory: directory, app: app, version: version)
@@ -142,8 +142,57 @@ public enum AppUpdateInstaller {
         return hex.count == 64 && hex.allSatisfy { $0.isASCII && $0.hexDigitValue != nil }
     }
 
-    /// 제한된 시스템 도구 실행과 실패의 구조화된 전달
-    private static func run(_ executable: String, _ arguments: [String]) throws -> String {
+    /// 고정 Ed25519 공개키로 ZIP SHA-256 raw32 메시지의 detached signature 검증
+    static func verifyReleaseSignature(_ archive: URL, signature: Data, publicKey: Data? = nil) throws {
+        let pinned = Data(base64Encoded: "eVqIIERnbh3hDEscyndQjUFkjhQqgtoHa6d/r6iF/1s=")!
+        let key = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey ?? pinned)
+        guard signature.count == 64 else { throw AppUpdateInstallError.invalidSignature }
+        let input = try FileHandle(forReadingFrom: archive)
+        defer { try? input.close() }
+        var hash = SHA256()
+        while let chunk = try input.read(upToCount: 1_048_576), !chunk.isEmpty {
+            try Task.checkCancellation()
+            hash.update(data: chunk)
+        }
+        guard key.isValidSignature(signature, for: Data(hash.finalize())) else { throw AppUpdateInstallError.invalidSignature }
+    }
+
+    /// 응답 선언값과 독립적인 실제 수신 바이트 상한·취소·총시간 제한
+    static func download(_ url: URL, to destination: URL, maximumBytes: Int64, expectedSize: Int64, session injectedSession: URLSession? = nil) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForResource = 120
+        configuration.timeoutIntervalForRequest = 30
+        let session = injectedSession ?? URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: URLRequest(url: url))
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200,
+              response.expectedContentLength < 0 || response.expectedContentLength == expectedSize else { throw AppUpdateInstallError.invalidDownload }
+        guard FileManager.default.createFile(atPath: destination.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw AppUpdateInstallError.invalidDownload
+        }
+        let output = try FileHandle(forWritingTo: destination)
+        defer { try? output.close() }
+        var count: Int64 = 0
+        var chunk = Data()
+        chunk.reserveCapacity(65_536)
+        let deadline = Date().addingTimeInterval(120)
+        for try await byte in bytes {
+            guard count < maximumBytes, Date() < deadline else { throw AppUpdateInstallError.invalidDownload }
+            count += 1
+            chunk.append(byte)
+            if chunk.count == 65_536 {
+                try Task.checkCancellation()
+                try output.write(contentsOf: chunk)
+                chunk.removeAll(keepingCapacity: true)
+            }
+        }
+        guard count == expectedSize else { throw AppUpdateInstallError.invalidDownload }
+        if !chunk.isEmpty { try output.write(contentsOf: chunk) }
+    }
+
+    /// 서명 확인 도구의 제한시간·출력 상한·취소 전파
+    static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval = 15) throws -> String {
+        try Task.checkCancellation()
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -151,9 +200,23 @@ public enum AppUpdateInstaller {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         try process.run()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let group = ProcessGroupTermination.group(of: process)
+        try? output.fileHandleForWriting.close()
+        defer {
+            ProcessGroupTermination.terminate(process, group: group, until: Date().addingTimeInterval(0.5))
+            try? output.fileHandleForReading.close()
+        }
+        var result = Data()
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning {
+            try Task.checkCancellation()
+            guard Date() < deadline else { throw AppUpdateInstallError.invalidArchive }
+            ProcessGroupTermination.drain(output.fileHandleForReading, limit: 1_048_576 - result.count) { result.append($0) }
+            guard result.count < 1_048_576 else { throw AppUpdateInstallError.invalidArchive }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        ProcessGroupTermination.drain(output.fileHandleForReading, limit: 1_048_576 - result.count) { result.append($0) }
         guard process.terminationStatus == 0 else { throw AppUpdateInstallError.invalidArchive }
-        return String(decoding: data, as: UTF8.self)
+        return String(decoding: result, as: UTF8.self)
     }
 }
