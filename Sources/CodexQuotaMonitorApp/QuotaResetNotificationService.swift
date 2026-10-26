@@ -12,7 +12,7 @@ final class QuotaResetNotificationService: NSObject, UNUserNotificationCenterDel
     let delivery: QuotaResetNotificationDelivery
 
     private let center: UNUserNotificationCenter?
-    private let logger = Logger(subsystem: "com.example.codexquotamonitor", category: "QuotaResetNotification")
+    private let logger = Logger(subsystem: AppUpdateInstaller.bundleIdentifier, category: "QuotaResetNotification")
 
     /// 앱 번들에 한해 시스템 알림 어댑터 구성
     init(

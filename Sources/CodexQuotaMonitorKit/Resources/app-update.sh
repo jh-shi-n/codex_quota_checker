@@ -235,7 +235,7 @@ staging="$(/usr/bin/mktemp -d "$parent/.CodexQuotaChecker.update.XXXXXX")"
 candidate="$staging/CodexQuotaChecker.app"
 run_bounded 300 /usr/bin/ditto "$verified_app" "$candidate"
 stage_code=9
-[[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$candidate/Contents/Info.plist")" == "com.example.codexquotamonitor" ]]
+[[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$candidate/Contents/Info.plist")" == "com.jh-shi-n.codexquotamonitor" ]]
 [[ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$candidate/Contents/Info.plist")" == "$version" ]]
 run_bounded 150 /usr/bin/codesign --verify --deep --strict "$candidate"
 stage_code=10

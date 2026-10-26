@@ -176,6 +176,25 @@ final class AppUpdateInstallerTests: XCTestCase {
         XCTAssertThrowsError(try AppUpdateInstaller.validateApp(prepared.app, expectedVersion: "0.1.0", installedVersion: "0.0.9"))
     }
 
+    /// 유효한 코드 서명의 구식 식별자 앱도 검증기·helper에서 교체 전 차단 검증
+    func testLegacyBundleIdentifierIsRejectedBeforeReplacement() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        let plist = fixture.candidate.appendingPathComponent("Contents/Info.plist")
+        let data = try Data(contentsOf: plist)
+        var info = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        info["CFBundleIdentifier"] = "com.example.codexquotamonitor"
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: plist)
+        try fixture.run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", fixture.candidate.path])
+        try fixture.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", fixture.candidate.path])
+        XCTAssertThrowsError(try AppUpdateInstaller.validateApp(fixture.candidate, expectedVersion: "0.1.0", installedVersion: "0.0.9")) { error in
+            guard case AppUpdateInstallError.invalidApp = error else { return XCTFail("구식 식별자 승인") }
+        }
+        XCTAssertNotEqual(try fixture.executeHelper(failOpen: false), 0)
+        XCTAssertEqual(try fixture.version(fixture.target), "0.0.9")
+        XCTAssertEqual(try String(contentsOf: fixture.userData, encoding: .utf8), "preserve-user-data")
+    }
+
     /// ps와 준비 신호를 대체하지 않은 실제 native 프로세스의 교체 승인 검증
     func testHelperAcceptsReadinessFromRealNativeProcess() throws {
         let fixture = try InstallerFixture()
@@ -313,7 +332,7 @@ private final class InstallerFixture {
         try FileManager.default.createDirectory(at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"),
             to: contents.appendingPathComponent("MacOS/CodexQuotaMonitor"))
-        let info = ["CFBundleIdentifier": "com.example.codexquotamonitor", "CFBundleExecutable": "CodexQuotaMonitor",
+        let info = ["CFBundleIdentifier": "com.jh-shi-n.codexquotamonitor", "CFBundleExecutable": "CodexQuotaMonitor",
             "CFBundleName": "CodexQuotaChecker", "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version,
             "CFBundleVersion": version == "0.0.9" ? "9" : "10"]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)

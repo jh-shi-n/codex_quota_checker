@@ -395,7 +395,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             .deletingLastPathComponent().appendingPathComponent("instance.lock"))
         do {
             if try lock.acquire() { return lock }
-            let identifier = Bundle.main.bundleIdentifier ?? "com.example.codexquotamonitor"
+            let identifier = Bundle.main.bundleIdentifier ?? AppUpdateInstaller.bundleIdentifier
             if let running = NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
                 .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated }) {
                 running.activate(options: [])
