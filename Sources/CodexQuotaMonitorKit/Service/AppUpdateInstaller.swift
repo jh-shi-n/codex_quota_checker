@@ -55,7 +55,9 @@ public enum AppUpdateInstaller {
                 return try unpack(archive, directory: directory, version: release.version, installedVersion: installedVersion)
             }
             return try await withTaskCancellationHandler {
-                try await task.value
+                let result = try await task.value
+                try Task.checkCancellation()
+                return result
             } onCancel: { task.cancel() }
         } catch {
             try? FileManager.default.removeItem(at: directory)
@@ -122,14 +124,13 @@ public enum AppUpdateInstaller {
         guard let resource = helperURL else { throw AppUpdateInstallError.helperMissing }
         let helper = prepared.directory.appendingPathComponent("app-update.sh")
         try FileManager.default.copyItem(at: resource, to: helper)
-        let log = prepared.directory.appendingPathComponent("install.log")
-        FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        let output = try FileHandle(forWritingTo: log)
+        let state = try AppUpdateState.begin(version: prepared.version, target: target)
+        let output = try FileHandle(forWritingTo: state.log)
         defer { try? output.close() }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-f", helper.path, String(ProcessInfo.processInfo.processIdentifier), target.path,
-                             prepared.app.path, prepared.directory.path, prepared.version]
+                             prepared.app.path, prepared.directory.path, prepared.version, AppUpdateState.directory.path, state.nonce]
         process.standardOutput = output
         process.standardError = output
         try process.run()

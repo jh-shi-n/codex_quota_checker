@@ -34,6 +34,7 @@ public final class AppUpdateStore: ObservableObject {
         self.defaults = defaults
         self.fetch = fetch
         self.now = now
+        if defaults === UserDefaults.standard { installationError = AppUpdateState.consumeFailure() }
         if let data = defaults.data(forKey: Self.cacheKey),
            let cache = try? JSONDecoder().decode(Cache.self, from: data),
            ReleaseVersion(cache.release.version) != nil,

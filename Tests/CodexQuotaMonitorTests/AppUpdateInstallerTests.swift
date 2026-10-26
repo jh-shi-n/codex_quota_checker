@@ -2,6 +2,7 @@
 // 이용처: 사용자 앱·계정 데이터와 분리된 앱 내 업데이트 회귀 테스트
 // 사용방법: swift test --filter AppUpdateInstallerTests
 import CryptoKit
+import Darwin
 import XCTest
 @testable import CodexQuotaMonitorKit
 
@@ -121,6 +122,14 @@ final class AppUpdateInstallerTests: XCTestCase {
         XCTAssertThrowsError(try AppUpdateInstaller.validateApp(prepared.app, expectedVersion: "0.1.0", installedVersion: "0.0.9"))
     }
 
+    /// ps와 준비 신호를 대체하지 않은 실제 native 프로세스의 교체 승인 검증
+    func testHelperAcceptsReadinessFromRealNativeProcess() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        XCTAssertEqual(try fixture.executeHelperWithRealProcess(), 0)
+        XCTAssertEqual(try fixture.version(fixture.target), "0.1.0")
+    }
+
     /// 실제 교체 성공 뒤 신규 앱 유지·구버전 제거·사용자 데이터 보존 검증
     func testHelperReplacesAppAndCleansBackup() throws {
         let fixture = try InstallerFixture()
@@ -152,6 +161,18 @@ final class AppUpdateInstallerTests: XCTestCase {
         defer { fixture.cleanup() }
         XCTAssertNotEqual(try fixture.executeHelper(failOpen: false, showProcess: false), 0)
         XCTAssertEqual(try fixture.version(fixture.target), "0.0.9")
+    }
+
+    /// 프로세스가 보여도 앱 준비 신호가 없으면 원본 복원과 다음 실행 실패 전달 검증
+    func testHelperRestoresWhenReadinessNeverArrivesAndRetainsResult() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        XCTAssertNotEqual(try fixture.executeHelper(failOpen: false, emitReadiness: false), 0)
+        XCTAssertEqual(try fixture.version(fixture.target), "0.0.9")
+        let directory = fixture.root.appendingPathComponent("UpdateState")
+        XCTAssertNotNil(AppUpdateState.consumeFailure(directory: directory))
+        XCTAssertNil(AppUpdateState.consumeFailure(directory: directory))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.workspace.path))
     }
 
     /// 기존 앱이 종료되지 않으면 원본 교체 없이 종료 검증
@@ -208,19 +229,86 @@ private final class InstallerFixture {
     }
 
     /// 실제 보조 스크립트를 소싱하되 open·프로세스 목록·대기만 테스트 경계로 교체
-    func executeHelper(failOpen: Bool, showProcess: Bool = true, oldProcessAlive: Bool = false) throws -> Int32 {
+    func executeHelper(failOpen: Bool, showProcess: Bool = true, oldProcessAlive: Bool = false, emitReadiness: Bool = true) throws -> Int32 {
         let helper = try XCTUnwrap(AppUpdateInstaller.helperURL)
+        let stateDirectory = root.appendingPathComponent("UpdateState")
+        let state = try AppUpdateState.begin(version: "0.1.0", target: target, directory: stateDirectory)
+        let readiness: [String: Any] = ["nonce": state.nonce, "version": "0.1.0", "target": target.path,
+            "executable": target.appendingPathComponent("Contents/MacOS/CodexQuotaMonitor").path, "pid": 2147483646]
+        try JSONSerialization.data(withJSONObject: readiness).write(to: stateDirectory.appendingPathComponent("template.json"))
         let script = """
-        function /usr/bin/open() { return \(failOpen ? 1 : 0); }
-        function /bin/ps() { \(showProcess ? "builtin print -r -- \"$$ $target_app/Contents/MacOS/CodexQuotaMonitor\"" : "return 0"); }
-        function /bin/sleep() { return 0; }
-        \(oldProcessAlive ? "function kill() { return 0; }" : "")
+        function /usr/bin/open() {
+            \(failOpen ? "return 1" : "")
+            if [[ "$1" == "-n" && "\(emitReadiness ? "yes" : "no")" == "yes" ]]; then
+                /bin/cp "$state_directory/template.json" "$ready"
+            fi
+            return 0
+        }
+        function /bin/ps() {
+            \(showProcess ? "if [[ \"$1\" == \"-p\" ]]; then builtin print -r -- \"$executable\"; else builtin print -r -- \"2147483646 $executable\"; fi" : "return 0")
+        }
+        function /bin/sleep() { command /bin/sleep 0.001; }
+        function kill() {
+            \(oldProcessAlive ? "return 0" : "if [[ \"$2\" == \"2147483646\" ]]; then return 0; fi; builtin kill \"$@\"")
+        }
         source "$1" "${@:2}"
         """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-f", "-c", script, "test-helper", helper.path, "2147483647", target.path,
-            candidate.path, workspace.path, "0.1.0"]
+            candidate.path, workspace.path, "0.1.0", stateDirectory.path, state.nonce]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    /// GUI 실행 진입점만 실제 native fixture 실행으로 연결하는 통합 검증
+    func executeHelperWithRealProcess() throws -> Int32 {
+        let source = root.appendingPathComponent("readiness.c")
+        let code = #"""
+        #include <stdio.h>
+        #include <unistd.h>
+        #include <limits.h>
+        int main(int argc, char **argv) {
+            if (argc != 4) return 2;
+            char ready[PATH_MAX], marker[PATH_MAX];
+            snprintf(ready, sizeof(ready), "%s/ready-%s.json", argv[2], argv[1]);
+            snprintf(marker, sizeof(marker), "%s/child.pid", argv[2]);
+            FILE *pidfile = fopen(marker, "w");
+            fprintf(pidfile, "%d", getpid()); fclose(pidfile);
+            FILE *file = fopen(ready, "w");
+            fprintf(file, "{\"nonce\":\"%s\",\"version\":\"0.1.0\",\"target\":\"%s\",\"executable\":\"%s/Contents/MacOS/CodexQuotaMonitor\",\"pid\":%d}", argv[1], argv[3], argv[3], getpid());
+            fclose(file);
+            sleep(60);
+            return 0;
+        }
+        """#
+        try code.write(to: source, atomically: true, encoding: .utf8)
+        let executable = candidate.appendingPathComponent("Contents/MacOS/CodexQuotaMonitor")
+        try run("/usr/bin/clang", [source.path, "-o", executable.path])
+        try run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", candidate.path])
+        let stateDirectory = root.appendingPathComponent("RealUpdateState")
+        let request = try AppUpdateState.begin(version: "0.1.0", target: target, directory: stateDirectory)
+        defer {
+            if let text = try? String(contentsOf: stateDirectory.appendingPathComponent("child.pid"), encoding: .utf8), let pid = Int32(text) {
+                _ = kill(pid, SIGKILL)
+            }
+        }
+        let script = """
+        function /usr/bin/open() {
+            if [[ "$1" == "-n" ]]; then
+                "$target_app/Contents/MacOS/CodexQuotaMonitor" "$nonce" "$state_directory" "$target_app" &
+            fi
+            return 0
+        }
+        source "$1" "${@:2}"
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-f", "-c", script, "real-helper", try XCTUnwrap(AppUpdateInstaller.helperURL).path,
+            "2147483647", target.path, candidate.path, workspace.path, "0.1.0", stateDirectory.path, request.nonce]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
