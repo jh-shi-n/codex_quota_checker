@@ -5,6 +5,15 @@ import Foundation
 
 /// 서버 날짜 문자열 그대로 유지하는 일별 계정 토큰 합계
 public struct AccountTokenUsage: Equatable, Sendable {
+    /// 서버 일별 버킷과 로컬 보완 집계에 공통 적용하는 UTC 날짜 기준
+    public static var reportingCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
+        return calendar
+    }
+
     public struct Day: Equatable, Sendable, Identifiable {
         public let date: String
         public let tokens: Int64

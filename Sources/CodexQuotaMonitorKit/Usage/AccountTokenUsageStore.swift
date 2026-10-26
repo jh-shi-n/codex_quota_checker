@@ -10,6 +10,8 @@ public final class AccountTokenUsageStore: ObservableObject {
     public static let shared = AccountTokenUsageStore(databaseURL: TokenUsageSnapshotCache.defaultDatabaseURL)
     public typealias Loader = @MainActor (AccountState) async -> Result<AccountTokenUsage, CodexQuotaServiceError>
     public var loader: Loader = { _ in .failure(.notConfigured) }
+    public typealias LocalTodayLoader = @MainActor (AccountState) async -> TokenUsageSnapshot?
+    public var localTodayLoader: LocalTodayLoader = { _ in nil }
 
     private struct Key: Hashable {
         let id: String
@@ -25,6 +27,7 @@ public final class AccountTokenUsageStore: ObservableObject {
         let task: Task<Void, Never>
     }
     @Published private var snapshots: [Key: AccountTokenUsage] = [:]
+    @Published private var localSnapshots: [Key: TokenUsageSnapshot] = [:]
     @Published private var failures: Set<Key> = []
     @Published private var operations: [Key: Operation] = [:]
     private var attemptedAt: [Key: Date] = [:]
@@ -36,11 +39,13 @@ public final class AccountTokenUsageStore: ObservableObject {
     private var loadedHomes: Set<String> = []
     private var loadingHomes: [String: UUID] = [:]
     private var persistedSnapshots: [String: AccountTokenUsage] = [:]
+    private let now: @Sendable () -> Date
     @Published public private(set) var persistenceError: String?
 
     /// 운영용 SQLite 또는 영속 저장 없는 테스트용 저장소 초기화
-    public init(databaseURL: URL? = nil) {
+    public init(databaseURL: URL? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
         persistence = databaseURL.map(SQLiteAccountTokenUsageStore.init)
+        self.now = now
     }
 
     /// 등록 경로의 마지막 정상값 복원; 서버 조회 없이 현재 계정 세대에 연결
@@ -113,6 +118,12 @@ public final class AccountTokenUsageStore: ObservableObject {
 
     /// 현재 계정의 마지막 정상 서버 응답 조회
     public func snapshot(for account: AccountState) -> AccountTokenUsage? { snapshots[Key(account)] }
+    /// 서버 캐시에 합치지 않는 현재 계정의 당일 로컬 보완값
+    public func localTodaySnapshot(for account: AccountState) -> TokenUsageSnapshot? {
+        guard let snapshot = localSnapshots[Key(account)],
+              AccountTokenUsage.reportingCalendar.isDate(snapshot.generatedAt, inSameDayAs: now()) else { return nil }
+        return snapshot
+    }
     /// 현재 계정의 조회 진행 여부
     public func isLoading(for account: AccountState) -> Bool { operations[Key(account)] != nil }
     /// 정상 캐시와 별도로 유지되는 마지막 조회 실패 여부
@@ -123,8 +134,10 @@ public final class AccountTokenUsageStore: ObservableObject {
     public func refresh(for account: AccountState, force: Bool = false) -> Task<Void, Never>? {
         let key = Key(account)
         guard account.status != .notConfigured, operations[key] == nil else { return nil }
-        if !force, let attempted = attemptedAt[key], Date().timeIntervalSince(attempted) < 300 { return nil }
-        attemptedAt[key] = Date()
+        let reference = now()
+        if !force, let attempted = attemptedAt[key], reference.timeIntervalSince(attempted) < 300,
+           AccountTokenUsage.reportingCalendar.isDate(attempted, inSameDayAs: reference) { return nil }
+        attemptedAt[key] = reference
         let id = UUID()
         let task = Task { @MainActor in
             let result = await loader(account)
@@ -141,6 +154,17 @@ public final class AccountTokenUsageStore: ObservableObject {
                 }
             case .failure: failures.insert(key)
             }
+            let today = AccountUsageCalendar.label(now())
+            if snapshots[key]?.days?.contains(where: { $0.date == today }) == true {
+                localSnapshots[key] = nil
+            } else {
+                let local = await localTodayLoader(account)
+                guard !Task.isCancelled, operations[key]?.id == id else { return }
+                if let local, local.availability == .available,
+                   AccountTokenUsage.reportingCalendar.isDate(local.generatedAt, inSameDayAs: now()) {
+                    localSnapshots[key] = local
+                }
+            }
             await persistenceTask?.value
             operations[key] = nil
         }
@@ -155,6 +179,7 @@ public final class AccountTokenUsageStore: ObservableObject {
             operations[key] = nil
         }
         snapshots = snapshots.filter { $0.key.id != accountID }
+        localSnapshots = localSnapshots.filter { $0.key.id != accountID }
         failures = failures.filter { $0.id != accountID }
         attemptedAt = attemptedAt.filter { $0.key.id != accountID }
         if let home = homes[accountID] {
@@ -170,6 +195,7 @@ public final class AccountTokenUsageStore: ObservableObject {
         persistenceGeneration += 1
         for operation in operations.values { operation.task.cancel() }
         operations.removeAll(); snapshots.removeAll(); failures.removeAll(); attemptedAt.removeAll()
+        localSnapshots.removeAll()
         persistedSnapshots.removeAll(); loadedHomes.removeAll(); loadingHomes.removeAll(); currentAccounts.removeAll()
     }
 }

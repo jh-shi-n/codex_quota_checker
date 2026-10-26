@@ -10,27 +10,29 @@ struct AccountUsageCalendar {
         let tokens: Int64?
         let isFuture: Bool
         let segment: Int
+        var isLocal = false
         var id: Date { date }
     }
     static var calendar: Calendar {
-        var value = Calendar(identifier: .gregorian)
-        value.timeZone = TimeZone(secondsFromGMT: 0)!
-        value.firstWeekday = 2
-        value.minimumDaysInFirstWeek = 4
-        return value
+        AccountTokenUsage.reportingCalendar
     }
     let today: Date
     let cutoff: Date
     private let values: [Date: Int64]
+    private let localTokens: Int64?
 
     /// 서버 날짜의 시간대 이동 없이 표시 범위와 제공 수치 구성
-    init(snapshot: AccountTokenUsage?, now: Date = Date(), months: Int = 12) {
+    init(snapshot: AccountTokenUsage?, localToday: TokenUsageSnapshot? = nil, now: Date = Date(), months: Int = 12) {
         let calendar = Self.calendar
         today = calendar.startOfDay(for: now)
         cutoff = TokenUsageOptions(retentionMonths: months).cutoff(at: now, calendar: calendar)
         values = Dictionary((snapshot?.days ?? []).compactMap { day in
             Self.date(day.date).map { ($0, day.tokens) }
         }, uniquingKeysWith: { _, last in last })
+        if let localToday, localToday.availability == .available,
+           calendar.isDate(localToday.generatedAt, inSameDayAs: now) {
+            localTokens = localToday.today.totalTokens
+        } else { localTokens = nil }
     }
 
     /// 최근 24주 고정 셀 구성; 누락 날짜의 0 채움 제외
@@ -61,9 +63,10 @@ struct AccountUsageCalendar {
         var segment = 0
         return (0..<count).map { index in
             let date = Self.calendar.date(byAdding: .day, value: index, to: start)!
-            let tokens = date >= cutoff && date <= today ? values[date] : nil
+            let isLocal = date == today && values[date] == nil && localTokens != nil
+            let tokens = date >= cutoff && date <= today ? (values[date] ?? (isLocal ? localTokens : nil)) : nil
             if tokens == nil { segment += 1 }
-            return Day(date: date, tokens: tokens, isFuture: date > today, segment: segment)
+            return Day(date: date, tokens: tokens, isFuture: date > today, segment: segment, isLocal: isLocal)
         }
     }
 

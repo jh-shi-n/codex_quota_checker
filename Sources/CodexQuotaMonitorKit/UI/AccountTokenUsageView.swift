@@ -1,6 +1,6 @@
 // 목적: 기존 잔디·주간 차트 구성으로 서버 계정 토큰 합계 표시
 // 이용처: 계정 상세의 유일한 토큰 사용량 영역
-// 사용방법: 서버 저장소와 차트 옵션 전달; 로컬 로그 수집 제외
+// 사용방법: 서버 저장소와 차트 옵션 전달; 당일 미제공 시 연결 계정 로컬값 보완
 import Charts
 import SwiftUI
 
@@ -22,7 +22,10 @@ struct AccountTokenUsageView: View {
     @State private var weekOffset = 0
 
     private var snapshot: AccountTokenUsage? { store.snapshot(for: account) }
-    private var model: AccountUsageCalendar { AccountUsageCalendar(snapshot: snapshot, months: options.retentionMonths) }
+    private var localToday: TokenUsageSnapshot? { store.localTodaySnapshot(for: account) }
+    private var model: AccountUsageCalendar {
+        AccountUsageCalendar(snapshot: snapshot, localToday: localToday, months: options.retentionMonths)
+    }
     private var week: [AccountUsageCalendar.Day] { model.week(offset: weekOffset) }
 
     var body: some View {
@@ -32,17 +35,23 @@ struct AccountTokenUsageView: View {
                 if !options.weeklyChartEnabled { Text("(최근 24주)").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
             }
-            if let snapshot {
+            if snapshot != nil || localToday != nil {
                 if options.weeklyChartEnabled { weeklyChart } else { heatmap }
                 HStack(spacing: 18) {
-                    metric("누적 토큰", snapshot.lifetimeTokens)
-                    metric("일 최대 토큰", snapshot.peakDailyTokens)
+                    metric("누적 토큰", snapshot?.lifetimeTokens)
+                    metric("일 최대 토큰", snapshot?.peakDailyTokens)
                 }
-                Text("조회 \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
+                if let snapshot {
+                    Text("서버 조회 \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
                     .font(.caption2).foregroundStyle(.secondary)
-                if snapshot.days == nil {
+                }
+                if model.day(at: nil).isLocal, let localToday {
+                    Text("오늘은 연결 계정의 로컬 기록으로 표시 · 조회 \(AccountDashboardFormatting.dateText(localToday.generatedAt, dateStyle: .short, timeStyle: .short))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if snapshot?.days == nil {
                     Text("서버에서 일별 내역을 제공하지 않았습니다.").font(.caption).foregroundStyle(.secondary)
-                } else if snapshot.days?.isEmpty == true {
+                } else if snapshot?.days?.isEmpty == true {
                     Text("서버가 반환한 일별 내역이 없습니다.").font(.caption).foregroundStyle(.secondary)
                 }
             } else {
@@ -57,11 +66,14 @@ struct AccountTokenUsageView: View {
             if let error = store.persistenceError {
                 Text(error).font(.caption).foregroundStyle(.secondary)
             }
-            Text("계정 서버 집계 · 날짜는 서버 제공 기준 · 미제공 날짜는 0과 구분됩니다.")
+            Text("서버 우선 · 오늘 미제공 시 연결 계정 로컬 집계 · 날짜는 UTC 기준")
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .environment(\.calendar, AccountUsageCalendar.calendar)
         .environment(\.timeZone, AccountUsageCalendar.calendar.timeZone)
+        .task(id: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") {
+            await store.refresh(for: account)?.value
+        }
         .onChange(of: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") { _, _ in
             selectedDate = nil
             weekOffset = 0
@@ -230,7 +242,7 @@ struct AccountTokenUsageView: View {
             Text(AccountUsageCalendar.label(day.date)).font(.caption.weight(.semibold))
             Text("계정 토큰 합계").font(.caption).foregroundStyle(.secondary)
             Text(value(day)).font(.callout.monospacedDigit())
-            Text(day.tokens == nil ? "이 날짜의 서버 수치가 없습니다." : "서버 제공 사용량")
+            Text(day.isLocal ? "연결 계정의 로컬 사용량" : (day.tokens == nil ? "이 날짜의 서버 수치가 없습니다." : "서버 제공 사용량"))
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(10)
@@ -240,7 +252,7 @@ struct AccountTokenUsageView: View {
 
     /// 미제공·미래 날짜와 실제 0 토큰의 표시 구분
     private func value(_ day: AccountUsageCalendar.Day) -> String {
-        day.tokens.map { "\(AccountDashboardFormatting.tokenCountText($0)) 토큰" } ?? (day.isFuture ? "예정 날짜" : "미제공")
+        day.tokens.map { "\(AccountDashboardFormatting.tokenCountText($0)) 토큰\(day.isLocal ? " · 로컬" : "")" } ?? (day.isFuture ? "예정 날짜" : "미제공")
     }
 
     /// 서버 요약의 선택적 토큰 수치 표시
