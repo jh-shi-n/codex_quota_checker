@@ -6,6 +6,27 @@ import XCTest
 
 @MainActor
 final class QuotaResetNotificationDeliveryTests: XCTestCase {
+    /// 일정 변경의 정직한 시스템 문구 및 권한 거부 시 동일 의미의 대체 표시 검증
+    func testWeeklyScheduleChangeUsesDistinctMessageAndFallback() async {
+        let backend = StubNotificationBackend(status: .authorized)
+        var fallbacks: [QuotaResetNotificationFallback] = []
+        let delivery = QuotaResetNotificationDelivery(backend: backend, onFallback: { fallbacks.append($0) })
+        let event = EarlyQuotaReset(accountID: "C1", windows: [.secondary], scheduleChangedWindows: [.secondary])
+        await delivery.notifyReset(event, displayName: "업무계정")
+        XCTAssertEqual(backend.delivered.first?.title, "할당량 초기화 일정 변경")
+        XCTAssertTrue(backend.delivered.first?.body.contains("업무계정의 주간 한도 초기화 예정 시각이 크게 변경") == true)
+        XCTAssertFalse(backend.delivered.first?.body.contains("초기화되었습니다") == true)
+        backend.status = .denied
+        await delivery.notifyReset(event)
+        XCTAssertEqual(fallbacks.count, 1)
+        XCTAssertTrue(fallbacks.first?.isScheduleChange == true)
+        XCTAssertEqual(fallbacks.first?.windowTitles, ["전체 한도 초기화 일정 변경"])
+        XCTAssertEqual(event.suppressingUnavailablePrimary(weeklyRemaining: 0), event)
+        let mixed = EarlyQuotaReset(accountID: "C1", windows: [.primary, .secondary], scheduleChangedWindows: [.secondary])
+        await delivery.notifyReset(mixed)
+        XCTAssertEqual(fallbacks.last?.windowTitles, ["5시간 한도 조기 초기화", "전체 한도 초기화 일정 변경"])
+    }
+
     /// 자동 Ping 실패의 시스템 전달과 거부·전달 오류 시 오류 노치 대체 검증
     func testAutomaticPingFailureUsesSystemOrOneErrorFallback() async {
         let backend = StubNotificationBackend(status: .authorized)

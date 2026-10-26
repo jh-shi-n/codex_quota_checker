@@ -621,7 +621,7 @@ public final class AccountStore: ObservableObject {
         states[index] = state
         logQuotaResult(.quotaResultApplied, result: result)
         guard result.config.isConfigured, result.state.status == .normal else { return }
-        let earlyWindows = changes.filter { $0.kind == .reset && $0.previousReset > observationNow() }.map(\.window)
+        let resetNotification = EarlyQuotaReset.notification(accountID: state.id, changes: changes, now: observationNow())
         preferencesStore.updateQuotaSnapshot(
             for: result.config.home,
             snapshot: PreferencesStore.QuotaSnapshot(
@@ -638,8 +638,8 @@ public final class AccountStore: ObservableObject {
                 secondaryResetEvidence: state.secondaryResetEvidence
             )
         )
-        if !earlyWindows.isEmpty {
-            onEarlyQuotaReset?(EarlyQuotaReset(accountID: state.id, windows: earlyWindows))
+        if let resetNotification {
+            onEarlyQuotaReset?(resetNotification)
         }
     }
 

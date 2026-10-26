@@ -154,7 +154,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 side: index < 2 ? .left : .right,
                 sessionID: fallback.id,
                 agentLabel: "할당량 리셋 알림",
-                taskName: fallback.isFailure ? windows : "\(windows) 조기 초기화",
+                taskName: fallback.isFailure || fallback.isScheduleChange ? windows : "\(windows) 조기 초기화",
                 status: fallback.isFailure ? .error : .completed
             ))
         }

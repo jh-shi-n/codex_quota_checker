@@ -12,6 +12,7 @@ public struct QuotaResetChange: Equatable, Sendable {
     public let cause: Cause
     public let previousReset: Date
     public let currentReset: Date?
+    public let scheduleShift: TimeInterval
 
     /// 계정 식별·조회 순서 확인 후 사용량 회복과 시각 변경의 독립 판정
     public static func detect(previous: AccountState, current: AccountState, now: Date = Date()) -> [Self] {
@@ -30,14 +31,15 @@ public struct QuotaResetChange: Equatable, Sendable {
             let recovered = oldUsed.flatMap { old in used.map { $0 < old && ($0 == 0 || reset.map { $0 > oldReset.addingTimeInterval(ResetTimeTracker.resetTolerance) } == true) } } == true
             if recovered {
                 let cause: Cause = evidence == .used ? .resetCredit : (oldReset <= now ? .scheduled : .unknown)
-                return Self(window: window, kind: .reset, cause: cause, previousReset: oldReset, currentReset: reset)
+                return Self(window: window, kind: .reset, cause: cause, previousReset: oldReset, currentReset: reset, scheduleShift: 0)
             }
             guard let reset, reset.timeIntervalSince1970.isFinite else { return nil }
             let delta = reset.timeIntervalSince(oldReset)
             let elapsed = current.lastUpdated.flatMap { latest in previous.lastUpdated.map { latest.timeIntervalSince($0) } }
             guard abs(delta) > ResetTimeTracker.resetTolerance,
                   elapsed.map({ abs(delta - $0) > ResetTimeTracker.resetTolerance }) ?? true else { return nil }
-            return Self(window: window, kind: .scheduleChanged, cause: evidence == .used ? .resetCredit : .unknown, previousReset: oldReset, currentReset: reset)
+            return Self(window: window, kind: .scheduleChanged, cause: evidence == .used ? .resetCredit : .unknown,
+                previousReset: oldReset, currentReset: reset, scheduleShift: delta - (elapsed ?? 0))
         }
     }
 }

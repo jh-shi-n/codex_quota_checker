@@ -10,6 +10,68 @@ import XCTest
 final class QuotaResetChangeTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// 사용량 변화 없이 주간 시각만 크게 이동한 업무 계정의 단일 알림 검증
+    func testStoreNotifiesWeeklyScheduleChangeWithoutUsageRecoveryOnce() async throws {
+        try await withStore { store, clock, source in
+            var events: [EarlyQuotaReset] = []
+            store.onEarlyQuotaReset = { events.append($0) }
+            for elapsed in [0.0, 10, 20, 30, 40] {
+                clock.wall = self.start.addingTimeInterval(elapsed)
+                clock.uptime = elapsed
+                var sample = self.state(elapsed: elapsed)
+                sample.primaryUsedPercent = 0
+                sample.secondaryUsedPercent = 0
+                sample.primaryResetAt = clock.wall.addingTimeInterval(18_000)
+                sample.secondaryResetAt = self.start.addingTimeInterval(elapsed < 20 ? 500_000 : 604_800 + elapsed)
+                await source.set(sample)
+                await store.refresh(accountID: "C1")
+            }
+            XCTAssertEqual(events.count, 1)
+            XCTAssertEqual(events.first?.windows, [.secondary])
+            XCTAssertEqual(events.first?.scheduleChangedWindows, [.secondary])
+            XCTAssertEqual(store.state(for: "C1")?.resetChanges, [])
+        }
+    }
+
+    /// 5시간 사용량 유지·증가와 무관한 주간 회복 및 일정 변경 감지 검증
+    func testWeeklyNotificationDoesNotRequirePrimaryRecovery() {
+        for primary in [60.0, 65.0] {
+            let before = state(elapsed: 0)
+            var after = state(elapsed: 10)
+            after.primaryUsedPercent = primary
+            after.secondaryResetAt = start.addingTimeInterval(700_000)
+            let changed = EarlyQuotaReset.notification(accountID: "C1",
+                changes: QuotaResetChange.detect(previous: before, current: after, now: start), now: start)
+            XCTAssertEqual(changed?.windows, [.secondary])
+            XCTAssertEqual(changed?.scheduleChangedWindows, [.secondary])
+            after.secondaryUsedPercent = 0
+            let recovered = EarlyQuotaReset.notification(accountID: "C1",
+                changes: QuotaResetChange.detect(previous: before, current: after, now: start), now: start)
+            XCTAssertEqual(recovered?.windows, [.secondary])
+            XCTAssertEqual(recovered?.scheduleChangedWindows, [])
+        }
+    }
+
+    /// 조회 경과 이동·작은 보정·5시간 단독 변경의 과잉 알림 방지 검증
+    func testScheduleNotificationThresholdExcludesElapsedTimeAndPrimaryOnlyChanges() {
+        let before = state(elapsed: 0)
+        for (delta, expected) in [(300.0, false), (3_899, false), (3_900, true), (-3_300, false), (-3_600, true)] {
+            var after = state(elapsed: 300)
+            after.secondaryResetAt = before.secondaryResetAt?.addingTimeInterval(delta)
+            let event = EarlyQuotaReset.notification(accountID: "C1",
+                changes: QuotaResetChange.detect(previous: before, current: after, now: start), now: start)
+            XCTAssertEqual(event != nil, expected, "delta=\(delta)")
+        }
+        var primaryOnly = state(elapsed: 10)
+        primaryOnly.primaryResetAt = start.addingTimeInterval(50_000)
+        XCTAssertNil(EarlyQuotaReset.notification(accountID: "C1",
+            changes: QuotaResetChange.detect(previous: before, current: primaryOnly, now: start), now: start))
+        var smallAdvance = state(elapsed: 900)
+        smallAdvance.secondaryResetAt = before.secondaryResetAt?.addingTimeInterval(-2_700)
+        XCTAssertNil(EarlyQuotaReset.notification(accountID: "C1",
+            changes: QuotaResetChange.detect(previous: before, current: smallAdvance, now: start), now: start))
+    }
+
     /// 사용량 회복이 없어도 일정 변경과 유효 리셋권 소모가 함께 있으면 원인 분류 검증
     func testScheduleChangeWithCreditUseHasCreditCause() {
         var before = state(elapsed: 0)
