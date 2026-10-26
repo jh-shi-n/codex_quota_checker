@@ -146,10 +146,8 @@ extension CodexQuotaMonitorAppDelegate {
         let accepted = paths.contains(where: { !$0.isEmpty })
             ? preferences.registerAccountPaths(paths) : preferences.updateAccountPaths(paths)
         guard accepted else {
-            let alert = NSAlert()
-            alert.messageText = "설정을 반영하지 못했습니다"
-            alert.informativeText = preferences.persistenceError ?? "계정 경로를 확인한 뒤 다시 시도해 주세요."
-            alert.runModal()
+            AppErrorPresenter.present(title: "설정을 반영하지 못했습니다",
+                                      message: preferences.persistenceError ?? AppErrorCode.settingsWrite.message("계정 경로를 확인한 뒤 다시 시도해 주세요."))
             return
         }
         applySavedAccountPaths()
@@ -259,16 +257,12 @@ extension CodexQuotaMonitorAppDelegate {
         }
     }
 
+    /// 로그인 항목 실패 코드와 해당 오류 정보 복사 대화상자 표시
     private func presentLaunchAtLoginFailureMessage(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = "로그인 시 자동 실행을 변경하지 못했습니다"
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        if let settingsWindow = settingsHostWindow {
-            alert.beginSheetModal(for: settingsWindow)
-        } else {
-            alert.runModal()
-        }
+        let failure = AppOperationFailure(.loginItem, "로그인 시 자동 실행을 변경하지 못했습니다.")
+        failure.record()
+        AppErrorPresenter.present(title: "로그인 시 자동 실행을 변경하지 못했습니다",
+                                  message: AppErrorCode.loginItem.message(message), failure: failure)
     }
 
     private var settingsHostWindow: NSWindow? {

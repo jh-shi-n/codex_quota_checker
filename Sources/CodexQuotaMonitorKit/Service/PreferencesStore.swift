@@ -182,7 +182,7 @@ public final class PreferencesStore: ObservableObject {
                     throw CocoaError(.coderReadCorrupt)
                 }
             }
-        } catch { loadError = "설정을 읽지 못했습니다. 원본을 보존했습니다: \(error.localizedDescription)" }
+        } catch { loadError = AppOperationFailure(.settingsRead, "설정을 읽지 못했습니다. 원본을 보존했습니다.", underlying: error).localizedDescription }
         self.settingsLoadFailed = loadError != nil
         self.persistenceError = loadError
         self.committedBundle = bundle
@@ -205,7 +205,7 @@ public final class PreferencesStore: ObservableObject {
             }
         }
         if let savedSettings, savedSettings.accountPaths.count != Self.accountPathCount {
-            loadError = "계정 경로 설정이 손상되었습니다. 원본을 보존했습니다."
+            loadError = AppErrorCode.settingsRead.message("계정 경로 설정이 손상되었습니다. 원본을 보존했습니다.")
             settingsLoadFailed = true
             persistenceError = loadError
         }
@@ -291,7 +291,7 @@ public final class PreferencesStore: ObservableObject {
                     self.cleanupQuotaSnapshots()
                     self.onQuotaSnapshotsRestored?()
                 } catch {
-                    self?.cacheMigrationError = "할당량 캐시를 복원하지 못했습니다: \(error.localizedDescription)"
+                    self?.cacheMigrationError = AppOperationFailure(.quotaCacheRead, "할당량 캐시를 복원하지 못했습니다.", underlying: error).localizedDescription
                     self?.cacheError = self?.cacheMigrationError
                 }
             }
@@ -381,7 +381,7 @@ public final class PreferencesStore: ObservableObject {
             do {
                 try await DatabaseWorkQueue.perform(operation)
                 self?.cacheError = self?.cacheMigrationError
-            } catch { self?.cacheError = "할당량 캐시 저장·정리에 실패했습니다: \(error.localizedDescription)" }
+            } catch { self?.cacheError = AppOperationFailure(.quotaCacheWrite, "할당량 캐시 저장·정리에 실패했습니다.", underlying: error).localizedDescription }
         }
     }
 
@@ -518,7 +518,7 @@ public final class PreferencesStore: ObservableObject {
         guard !settingsLoadFailed else { return nil }
         let normalized = normalizedAccountPath(path)
         guard validateAccountPath(normalized) == .valid else {
-            persistenceError = "연결할 계정 폴더를 다시 확인해 주세요."
+            persistenceError = AppErrorCode.accountPathMissing.message("연결할 계정 폴더를 다시 확인해 주세요.")
             return nil
         }
         let resolved = URL(fileURLWithPath: normalized).resolvingSymlinksInPath().path
@@ -526,7 +526,7 @@ public final class PreferencesStore: ObservableObject {
             !path.isEmpty && URL(fileURLWithPath: path).resolvingSymlinksInPath().path == resolved
         }
         guard let index = existing ?? accountPaths.firstIndex(of: "") else {
-            persistenceError = "최대 4개 계정까지 연결할 수 있습니다. 설정에서 기존 계정을 정리해 주세요."
+            persistenceError = AppErrorCode.accountLimit.message("최대 4개 계정까지 연결할 수 있습니다. 설정에서 기존 계정을 정리해 주세요.")
             return nil
         }
         var paths = accountPaths
@@ -610,7 +610,8 @@ public final class PreferencesStore: ObservableObject {
 
     /// 비동기 장기 저장소 오류를 설정 화면에 전달
     public func reportTokenHistoryError(_ message: String?) {
-        if tokenHistoryError != message { tokenHistoryError = message }
+        let coded = message.map { AppErrorCode.tokenHistory.message($0) }
+        if tokenHistoryError != coded { tokenHistoryError = coded }
     }
 
     public func updateLaunchAtLogin(_ enabled: Bool) {
@@ -656,7 +657,7 @@ public final class PreferencesStore: ObservableObject {
                 firstAccountRegisteredAt = committedBundle.firstAccountRegisteredAt
                 accountPathsWereRemoved = committedBundle.accountPathsWereRemoved == true
             }
-            persistenceError = "설정을 반영하지 못했습니다: \(error.localizedDescription)"
+            persistenceError = AppOperationFailure(.settingsWrite, "설정을 반영하지 못했습니다.", underlying: error).localizedDescription
             return false
         }
     }

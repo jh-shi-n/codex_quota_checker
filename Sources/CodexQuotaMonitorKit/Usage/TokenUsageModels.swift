@@ -114,6 +114,11 @@ public enum TokenUsageSnapshotError: String, Codable, Equatable, Sendable {
 
     /// 민감한 경로를 제외한 집계 실패 원인 안내
     public var userMessage: String {
+        appErrorCode.message(failureSummary)
+    }
+
+    /// 집계 실패의 민감정보 없는 안내
+    private var failureSummary: String {
         switch self {
         case .invalidHome: return "계정 경로를 확인해 주세요."
         case .sessionsDirectoryUnavailable: return "로컬 세션 폴더를 읽을 수 없습니다."

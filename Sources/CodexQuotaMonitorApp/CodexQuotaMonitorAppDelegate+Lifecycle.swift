@@ -29,7 +29,14 @@ extension CodexQuotaMonitorAppDelegate {
         }
         synchronizeLaunchAtLoginStatus()
         quotaResetNotifications.refreshAuthorization()
-        AppUpdateState.publishReadiness()
+        do { try AppUpdateState.publishReadiness() }
+        catch {
+            let failure = AppOperationFailure(.updateReadiness, "업데이트 초기화 완료 신호를 기록하지 못했습니다.", underlying: error)
+            failure.record()
+            let message = failure.userMessage
+            FileHandle.standardError.write(Data((message + "\n").utf8))
+        }
+        appUpdates.observeInstallationFailure()
     }
 
     /// 시스템 설정에서 앱으로 복귀할 때 자동실행 승인 상태 재확인

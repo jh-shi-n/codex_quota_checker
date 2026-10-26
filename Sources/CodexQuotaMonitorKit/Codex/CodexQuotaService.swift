@@ -14,6 +14,11 @@ public enum CodexQuotaServiceError: Error, Equatable, Sendable {
 
 extension CodexQuotaServiceError: LocalizedError {
     public var errorDescription: String? {
+        appErrorCode.message(failureSummary)
+    }
+
+    /// 외부 응답·프로토콜 원문 대신 고정된 사용자 안내 반환
+    private var failureSummary: String {
         switch self {
         case .notConfigured:
             return "Account not configured"
@@ -28,12 +33,12 @@ extension CodexQuotaServiceError: LocalizedError {
         case let .processCrashed(status):
             if let status { return "Codex app-server exited with status \(status)" }
             return "Codex app-server exited unexpectedly"
-        case let .malformedResponse(message):
-            return "Malformed Codex response: \(message)"
-        case let .protocolError(message):
-            return "Codex protocol error: \(message)"
-        case let .transport(message):
-            return "Codex transport error: \(message)"
+        case .malformedResponse:
+            return "Codex 응답을 해석하지 못했습니다."
+        case .protocolError:
+            return "Codex 요청 처리에 실패했습니다."
+        case .transport:
+            return "Codex 연결에 실패했습니다."
         }
     }
 }

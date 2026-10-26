@@ -130,7 +130,7 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
             onDiagnostic("authorization_status_read")
         } catch {
             guard revision == authorizationRevision else { return }
-            updateAuthorization(.error, error: error.localizedDescription)
+            updateAuthorization(.error, error: AppOperationFailure(.notificationDelivery, "시스템 알림 처리에 실패했습니다.", underlying: error).localizedDescription)
             onDiagnostic("authorization_status_failed")
         }
     }
@@ -152,7 +152,7 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
             try await backend.requestAuthorization()
             onDiagnostic("authorization_request_completed")
         } catch {
-            requestError = error.localizedDescription
+            requestError = AppOperationFailure(.notificationDelivery, "시스템 알림 처리에 실패했습니다.", underlying: error).localizedDescription
             onDiagnostic("authorization_request_failed")
         }
 
@@ -162,7 +162,7 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
             updateAuthorization(authorization, error: recovered ? nil : requestError)
             onDiagnostic("authorization_status_read")
         } catch {
-            updateAuthorization(.error, error: error.localizedDescription)
+            updateAuthorization(.error, error: AppOperationFailure(.notificationDelivery, "시스템 알림 처리에 실패했습니다.", underlying: error).localizedDescription)
             onDiagnostic("authorization_status_failed")
         }
     }
@@ -189,7 +189,7 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
             status = replacingDelivery(outcome: .delivered, error: nil)
             onDiagnostic("reset_notification_delivered")
         } catch {
-            status = replacingDelivery(outcome: .fallback, error: error.localizedDescription)
+            status = replacingDelivery(outcome: .fallback, error: AppOperationFailure(.notificationDelivery, "시스템 알림 처리에 실패했습니다.", underlying: error).localizedDescription)
             onDiagnostic("reset_fallback_delivery_failed")
             onFallback(fallback)
         }
@@ -211,7 +211,7 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
             status = replacingDelivery(outcome: .delivered, error: nil)
             return true
         } catch {
-            status = replacingDelivery(outcome: .failed, error: error.localizedDescription)
+            status = replacingDelivery(outcome: .failed, error: AppOperationFailure(.notificationDelivery, "시스템 알림 처리에 실패했습니다.", underlying: error).localizedDescription)
             onDiagnostic("scheduled_notification_delivery_failed")
             return false
         }
@@ -240,7 +240,7 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
             status = replacingDelivery(outcome: .testDelivered, error: nil)
             onDiagnostic("test_notification_delivered")
         } catch {
-            status = replacingDelivery(outcome: .testFailed, error: error.localizedDescription)
+            status = replacingDelivery(outcome: .testFailed, error: AppOperationFailure(.notificationDelivery, "시스템 알림 처리에 실패했습니다.", underlying: error).localizedDescription)
             onDiagnostic("test_notification_failed")
         }
     }

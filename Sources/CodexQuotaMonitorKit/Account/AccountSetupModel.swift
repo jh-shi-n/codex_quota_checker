@@ -93,7 +93,7 @@ public final class AccountSetupModel: ObservableObject {
         operation = nil
         guard account.status == .normal else {
             phase = .failed
-            message = Self.failureMessage(for: account.status)
+            message = account.errorMessage ?? Self.failureMessage(for: account.status)
             return
         }
         verifiedPath = normalized
@@ -144,10 +144,10 @@ public final class AccountSetupModel: ObservableObject {
     /// 인증·설치·네트워크 실패의 사용자 안내 변환
     private static func failureMessage(for status: AccountStatus) -> String {
         switch status {
-        case .loginRequired: return "선택한 폴더의 Codex 계정에 로그인한 뒤 다시 확인해 주세요."
-        case .codexNotFound: return "Codex CLI를 찾지 못했습니다. 설치한 뒤 다시 확인해 주세요."
-        case .timeout: return "연결 확인 시간이 초과되었습니다. 네트워크 상태를 확인하고 다시 시도해 주세요."
-        default: return "할당량을 확인하지 못했습니다. 계정 폴더와 로그인 상태를 확인해 주세요."
+        case .loginRequired: return AppErrorCode.accountAuthentication.message("선택한 폴더의 Codex 계정에 로그인한 뒤 다시 확인해 주세요.")
+        case .codexNotFound: return AppErrorCode.cliMissing.message("Codex CLI를 찾지 못했습니다. 설치한 뒤 다시 확인해 주세요.")
+        case .timeout: return AppErrorCode.cliTimeout.message("연결 확인 시간이 초과되었습니다. 네트워크 상태를 확인하고 다시 시도해 주세요.")
+        default: return AppErrorCode.cliTransport.message("할당량을 확인하지 못했습니다. 계정 폴더와 로그인 상태를 확인해 주세요.")
         }
     }
 }

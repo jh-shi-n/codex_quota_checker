@@ -39,11 +39,11 @@ public enum AccountPathValidation: Equatable, Sendable {
         case .empty, .valid:
             return nil
         case .missing:
-            return "계정 경로가 존재하지 않습니다."
+            return AppErrorCode.accountPathMissing.message("계정 경로가 존재하지 않습니다.")
         case .notDirectory:
-            return "계정 경로는 폴더여야 합니다."
+            return AppErrorCode.accountPathNotDirectory.message("계정 경로는 폴더여야 합니다.")
         case .unreadable:
-            return "계정 폴더를 읽을 수 없습니다."
+            return AppErrorCode.accountPathUnreadable.message("계정 폴더를 읽을 수 없습니다.")
         }
     }
 }

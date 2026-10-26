@@ -24,17 +24,30 @@ public final class AppUpdateStore: ObservableObject {
     private var operationID: UUID?
     private var installationTask: Task<Void, Never>?
     private var installationID: UUID?
+    private var failureObservation: Task<Void, Never>?
+    private var pendingFailureAlert: String?
+    private let presentFailure: @MainActor (String, AppOperationFailure?) -> Void
+    private var failureContext: AppOperationFailure?
     private static let cacheKey = "CodexQuotaMonitor.appUpdateCache"
 
     /// 설치 버전과 저장된 공개 릴리스 캐시 복원
     public init(currentVersion: String = AppVersion.current, defaults: UserDefaults = .standard,
                 fetch: @escaping AppReleaseFetch = GitHubAppReleaseClient.fetch,
-                now: @escaping () -> Date = { Date() }) {
+                now: @escaping () -> Date = { Date() },
+                presentFailure: @escaping @MainActor (String, AppOperationFailure?) -> Void = {
+                    AppErrorPresenter.present(title: "업데이트 실패했습니다", message: $0, failure: $1)
+                }) {
         self.currentVersion = currentVersion
         self.defaults = defaults
         self.fetch = fetch
         self.now = now
-        if defaults === UserDefaults.standard { installationError = AppUpdateState.consumeFailure() }
+        self.presentFailure = presentFailure
+        if defaults === UserDefaults.standard, let notice = AppUpdateState.takeFailure() {
+            notice.failure.record()
+            installationError = notice.message
+            failureContext = notice.failure
+            if notice.shouldAlert { pendingFailureAlert = notice.message }
+        }
         if let data = defaults.data(forKey: Self.cacheKey),
            let cache = try? JSONDecoder().decode(Cache.self, from: data),
            ReleaseVersion(cache.release.version) != nil,
@@ -51,7 +64,7 @@ public final class AppUpdateStore: ObservableObject {
 
     public var statusText: String {
         if isChecking { return "업데이트 확인 중" }
-        if checkFailed { return "업데이트 확인 실패 · 다시 시도해주세요" }
+        if checkFailed { return AppErrorCode.updateCheck.message("업데이트 확인 실패 · 다시 시도해주세요") }
         guard latest != nil else { return "업데이트 확인 전" }
         return updateAvailable ? "새 버전을 사용할 수 있습니다" : "사용 가능한 새 버전이 없습니다"
     }
@@ -93,6 +106,8 @@ public final class AppUpdateStore: ObservableObject {
 
     /// 종료 시 공개 API 요청 취소 및 뒤늦은 응답 반영 방지
     public func cancel() {
+        failureObservation?.cancel()
+        failureObservation = nil
         operationID = nil
         task?.cancel()
         task = nil
@@ -118,18 +133,51 @@ public final class AppUpdateStore: ObservableObject {
                     try? FileManager.default.removeItem(at: prepared.directory)
                     return
                 }
-                do { try AppUpdateInstaller.launch(prepared) }
+                do { try await AppUpdateInstaller.launch(prepared) }
                 catch {
                     try? FileManager.default.removeItem(at: prepared.directory)
                     throw error
                 }
+                guard !Task.isCancelled, self.installationID == id else { return }
                 NSApplication.shared.terminate(nil)
             } catch {
                 guard !Task.isCancelled, self.installationID == id else { return }
-                self.installationError = (error as? AppUpdateInstallError)?.errorDescription ?? "업데이트 준비에 실패했습니다. 다시 시도해주세요."
+                let failure = AppOperationFailure.update(error)
+                failure.record()
+                let message = "업데이트 실패했습니다.\n" + failure.userMessage
+                self.installationError = message
+                self.failureContext = failure
                 self.isInstalling = false
                 self.installationTask = nil
+                self.presentFailure(message, failure)
             }
+        }
+    }
+
+    /// 이전 helper 결과 알림과 복원 앱 시작 이후 확정되는 최종 결과 관찰
+    public func observeInstallationFailure() {
+        AppUpdateState.registerFailureObserver()
+        if let message = pendingFailureAlert {
+            pendingFailureAlert = nil
+            presentFailure(message, failureContext)
+        }
+        guard failureObservation == nil else { return }
+        failureObservation = Task { [weak self] in
+            for _ in 0..<240 {
+                guard !Task.isCancelled else { return }
+                if let notice = AppUpdateState.takeFailure() {
+                    notice.failure.record()
+                    self?.installationError = notice.message
+                    self?.failureContext = notice.failure
+                    if notice.shouldAlert { self?.presentFailure(notice.message, notice.failure) }
+                }
+                let pending = AppUpdateState.directory.appendingPathComponent("pending.json")
+                let result = AppUpdateState.directory.appendingPathComponent("result.json")
+                if !FileManager.default.fileExists(atPath: pending.path),
+                   !FileManager.default.fileExists(atPath: result.path) { break }
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            }
+            self?.failureObservation = nil
         }
     }
 

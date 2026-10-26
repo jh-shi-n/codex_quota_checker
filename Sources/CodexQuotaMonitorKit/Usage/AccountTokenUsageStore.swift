@@ -89,11 +89,11 @@ public final class AccountTokenUsageStore: ObservableObject {
                 }
                 for home in completed { self.loadingHomes[home] = nil }
                 self.loadedHomes.formUnion(completed.subtracting(restored.1))
-                self.persistenceError = restored.1.isEmpty ? nil : "마지막 토큰 사용량을 복원하지 못했습니다."
+                self.persistenceError = restored.1.isEmpty ? nil : AppErrorCode.tokenCacheRead.message("마지막 토큰 사용량을 복원하지 못했습니다.")
             } catch {
                 guard let self, self.persistenceGeneration == generation else { return }
                 for home in missing where self.loadingHomes[home] == reservationID { self.loadingHomes[home] = nil }
-                self.persistenceError = "마지막 토큰 사용량을 복원하지 못했습니다."
+                self.persistenceError = AppErrorCode.tokenCacheRead.message("마지막 토큰 사용량을 복원하지 못했습니다.")
             }
         }
     }
@@ -107,7 +107,7 @@ public final class AccountTokenUsageStore: ObservableObject {
         persistenceTask = Task { [weak self] in
             await previous?.value
             do { try await DatabaseWorkQueue.perform(operation); self?.persistenceError = nil }
-            catch { self?.persistenceError = "토큰 사용량 캐시를 저장·정리하지 못했습니다." }
+            catch { self?.persistenceError = AppErrorCode.tokenCacheWrite.message("토큰 사용량 캐시를 저장·정리하지 못했습니다.") }
         }
     }
 

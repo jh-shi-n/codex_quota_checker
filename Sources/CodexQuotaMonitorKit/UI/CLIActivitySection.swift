@@ -10,7 +10,7 @@ public typealias SessionActivitySnapshotSink = @MainActor @Sendable (SessionActi
 public struct CLIActivitySection: View {
     public static let loadingText = "세션 실행 기록을 불러오는 중입니다…"
     public static let emptyText = "최근 15분간 실행 기록이 없습니다."
-    public static let unavailableText = "세션 실행 기록을 불러올 수 없습니다."
+    public static let unavailableText = AppErrorCode.sessionRead.message("세션 실행 기록을 불러올 수 없습니다.")
     /// Bounded refresh cadence while the account popover remains mounted.
     /// Loads are sequential, so a slow provider read cannot overlap another.
     public static let activityRefreshInterval: TimeInterval = 5
