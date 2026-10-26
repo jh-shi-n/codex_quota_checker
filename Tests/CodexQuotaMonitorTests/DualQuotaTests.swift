@@ -258,7 +258,9 @@ final class DualQuotaTests: XCTestCase {
         }
 
         await store.refresh(accountID: "C1")
+        await preferences.waitForCacheIO()
         let reloadedPreferences = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
+        await reloadedPreferences.waitForCacheIO()
         let snapshot = reloadedPreferences.quotaSnapshot(for: configs[0].home)
         XCTAssertEqual(snapshot?.primaryRemainingPercent, 80)
         XCTAssertEqual(snapshot?.secondaryRemainingPercent, 40)

@@ -90,7 +90,9 @@ public final class AccountStore: ObservableObject {
             self.states = self.states.map { state in
                 guard state.isWaitingForRefresh, !state.isRefreshing,
                       let config = self.configs.first(where: { $0.id == state.id }) else { return state }
-                return Self.initialState(for: config, preferencesStore: resolvedPreferencesStore)
+                var restored = Self.initialState(for: config, preferencesStore: resolvedPreferencesStore)
+                restored.configurationGeneration = state.configurationGeneration
+                return restored
             }
         }
     }
@@ -184,6 +186,9 @@ public final class AccountStore: ObservableObject {
     /// soon as its task finishes, and an individual failure becomes an error
     /// state without cancelling sibling tasks.
     public func refreshAll() async {
+        guard !Task.isCancelled, !shuttingDown else { return }
+        await preferencesStore.waitForCacheIO()
+        guard !Task.isCancelled, !shuttingDown else { return }
         if configs.contains(where: \.isConfigured) { onQuotaRefreshStarted?() }
         let configsSnapshot = configs
         let previousStates = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
@@ -214,7 +219,7 @@ public final class AccountStore: ObservableObject {
             }
 
             for await result in group {
-                guard configs.first(where: { $0.id == result.config.id }) == result.config,
+                guard !Task.isCancelled, !shuttingDown, configs.first(where: { $0.id == result.config.id }) == result.config,
                       state(for: result.config.id)?.configurationGeneration == previousStates[result.config.id]?.configurationGeneration,
                       latestRequestIDs[result.config.id] == result.requestID,
                       accountGenerations[result.config.id] == generations[result.config.id]
@@ -235,6 +240,9 @@ public final class AccountStore: ObservableObject {
 
     /// 같은 조회를 공유한 호출은 화면 적용 세대가 달라도 성공 결과 공유
     public func refreshOutcome(accountID id: String, forceFresh: Bool = false) async -> RefreshOutcome {
+        guard !Task.isCancelled, !shuttingDown else { return .superseded }
+        await preferencesStore.waitForCacheIO()
+        guard !Task.isCancelled, !shuttingDown else { return .superseded }
         guard let config = configs.first(where: { $0.id == id }) else { return .notConfigured }
 
         guard config.isConfigured else {
@@ -263,7 +271,7 @@ public final class AccountStore: ObservableObject {
             revision: revision,
             forceFresh: forceFresh
         )
-        guard configs.first(where: { $0.id == id }) == config,
+        guard !Task.isCancelled, !shuttingDown, configs.first(where: { $0.id == id }) == config,
               state(for: id)?.configurationGeneration == revision,
               latestRequestIDs[id] == result.requestID else {
             logQuotaResult(.quotaResultDiscarded, result: result, reason: "superseded")
@@ -352,25 +360,13 @@ public final class AccountStore: ObservableObject {
     private final class FetchHandle: @unchecked Sendable {
         let task: Task<AccountFetchResult, Never>
         let requestID: UUID
-        private let lock = NSLock()
-        private var waiters = Set<UUID>()
-
-        /// 공유 조회 소비자의 독립 취소를 위한 참조 등록
-        func addWaiter(_ id: UUID) { lock.lock(); waiters.insert(id); lock.unlock() }
-
-        /// 마지막 소비자 취소 시에만 실제 조회 취소
-        func removeWaiter(_ id: UUID) {
-            lock.lock()
-            let removed = waiters.remove(id) != nil
-            let cancel = removed && waiters.isEmpty
-            lock.unlock()
-            if cancel { task.cancel() }
-        }
+        let waiters: SharedTaskWaiters
 
         /// 비동기 조회 작업과 요청 식별자 연결
         init(task: Task<AccountFetchResult, Never>, requestID: UUID) {
             self.task = task
             self.requestID = requestID
+            self.waiters = SharedTaskWaiters { task.cancel() }
         }
     }
 
@@ -388,7 +384,8 @@ public final class AccountStore: ObservableObject {
         }
         let key = FetchKey(id: config.id, homePath: config.home.path, revision: revision)
         let handle: FetchHandle
-        if !forceFresh, let existing = inFlightFetches[key], !existing.task.isCancelled {
+        let waiterID = UUID()
+        if !forceFresh, let existing = inFlightFetches[key], !existing.task.isCancelled, existing.waiters.tryAdd(waiterID) {
             handle = existing
         } else {
             let requestID = UUID()
@@ -411,20 +408,19 @@ public final class AccountStore: ObservableObject {
                 return result
             }
             let created = FetchHandle(task: task, requestID: requestID)
+            _ = created.waiters.tryAdd(waiterID)
             inFlightFetches[key] = created
             activeFetches[requestID] = created
             handle = created
         }
 
         latestRequestIDs[config.id] = handle.requestID
-        let waiterID = UUID()
-        handle.addWaiter(waiterID)
         let result = await withTaskCancellationHandler {
             await handle.task.value
         } onCancel: {
-            handle.removeWaiter(waiterID)
+            handle.waiters.remove(waiterID)
         }
-        handle.removeWaiter(waiterID)
+        handle.waiters.remove(waiterID)
         activeFetches[handle.requestID] = nil
         if inFlightFetches[key] === handle {
             inFlightFetches[key] = nil

@@ -86,6 +86,23 @@ final class AppUpdateInstallerTests: XCTestCase {
         }
     }
 
+    /// 패키징 스크립트 산출 ZIP·독립 서명·리소스 번들·codesign 통합 검증
+    func testPackagedReleaseArchiveWhenProvided() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["CODEX_UPDATE_ARCHIVE_SMOKE"] else { throw XCTSkip("배포 ZIP 경로 미지정") }
+        let archive = URL(fileURLWithPath: path)
+        let signature = try Data(contentsOf: URL(fileURLWithPath: path + ".sig"))
+        try AppUpdateInstaller.verifyReleaseSignature(archive, signature: signature)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CodexQuotaChecker-update-smoke-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let version = environment["CODEX_UPDATE_ARCHIVE_VERSION"] ?? "0.1.0"
+        let prepared = try AppUpdateInstaller.unpack(archive, directory: directory, version: version, installedVersion: "0.0.0")
+        let resources = prepared.app.appendingPathComponent("Contents/Resources/CodexQuotaMonitor_CodexQuotaMonitorKit.bundle")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resources.path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: prepared.app.appendingPathComponent("Contents/MacOS/CodexQuotaMonitor").path))
+    }
+
     /// 정상 SHA-256 허용과 파일 변조·크기 불일치·검증 정보 누락 차단 검증
     func testDownloadRequiresCorrectSizeAndDigest() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

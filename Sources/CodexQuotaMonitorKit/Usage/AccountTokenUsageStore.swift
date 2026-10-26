@@ -32,7 +32,9 @@ public final class AccountTokenUsageStore: ObservableObject {
     private var persistenceGeneration = 0
     private let persistence: SQLiteAccountTokenUsageStore?
     private var homes: [String: String] = [:]
+    private var currentAccounts: [AccountState] = []
     private var loadedHomes: Set<String> = []
+    private var loadingHomes: [String: UUID] = [:]
     private var persistedSnapshots: [String: AccountTokenUsage] = [:]
     @Published public private(set) var persistenceError: String?
 
@@ -43,13 +45,14 @@ public final class AccountTokenUsageStore: ObservableObject {
 
     /// 등록 경로의 마지막 정상값 복원; 서버 조회 없이 현재 계정 세대에 연결
     public func restore(accounts: [AccountState], homes configuredHomes: [String: URL], now: Date = Date()) {
+        currentAccounts = accounts
         let nextHomes = configuredHomes.mapValues { $0.resolvingSymlinksInPath().standardizedFileURL.path }
         for id in homes.keys where homes[id] != nextHomes[id] { invalidate(accountID: id) }
         let changed = homes != nextHomes
         homes = nextHomes
-        if changed { persistenceGeneration += 1 }
+        if changed { persistenceGeneration += 1; loadingHomes.removeAll() }
         let generation = persistenceGeneration
-        let missing = Set(accounts.filter { $0.status != .notConfigured }.compactMap { homes[$0.id] }).subtracting(loadedHomes)
+        let missing = Set(accounts.filter { $0.status != .notConfigured }.compactMap { homes[$0.id] }).subtracting(loadedHomes).subtracting(loadingHomes.keys)
         for account in accounts {
             guard let home = homes[account.id], snapshots[Key(account)] == nil,
                   let snapshot = persistedSnapshots[home],
@@ -58,7 +61,8 @@ public final class AccountTokenUsageStore: ObservableObject {
             snapshots[Key(account)] = snapshot
         }
         guard let persistence, changed || !missing.isEmpty else { return }
-        loadedHomes.formUnion(missing)
+        let reservationID = UUID()
+        for home in missing { loadingHomes[home] = reservationID }
         let allHomes = Set(homes.values)
         let previous = persistenceTask
         persistenceTask = Task { [weak self] in
@@ -75,18 +79,20 @@ public final class AccountTokenUsageStore: ObservableObject {
                     return (restored, failed)
                 }
                 guard let self, self.persistenceGeneration == generation else { return }
-                for (home, value) in restored.0 where self.persistedSnapshots[home] == nil { self.persistedSnapshots[home] = value }
-                for account in accounts {
+                let completed = Set(missing.filter { self.loadingHomes[$0] == reservationID })
+                for (home, value) in restored.0 where completed.contains(home) && self.persistedSnapshots[home] == nil { self.persistedSnapshots[home] = value }
+                for account in self.currentAccounts {
                     guard let home = self.homes[account.id], self.snapshots[Key(account)] == nil,
                           let snapshot = self.persistedSnapshots[home],
                           account.email == nil || account.email == snapshot.accountEmail else { continue }
                     self.snapshots[Key(account)] = snapshot
                 }
-                self.loadedHomes.subtract(restored.1)
+                for home in completed { self.loadingHomes[home] = nil }
+                self.loadedHomes.formUnion(completed.subtracting(restored.1))
                 self.persistenceError = restored.1.isEmpty ? nil : "마지막 토큰 사용량을 복원하지 못했습니다."
             } catch {
                 guard let self, self.persistenceGeneration == generation else { return }
-                self.loadedHomes.subtract(missing)
+                for home in missing where self.loadingHomes[home] == reservationID { self.loadingHomes[home] = nil }
                 self.persistenceError = "마지막 토큰 사용량을 복원하지 못했습니다."
             }
         }
@@ -154,6 +160,7 @@ public final class AccountTokenUsageStore: ObservableObject {
         if let home = homes[accountID] {
             persistedSnapshots[home] = nil
             loadedHomes.remove(home)
+            loadingHomes[home] = nil
             if let persistence { enqueuePersistence { try persistence.remove(home: home) } }
         }
     }
@@ -163,6 +170,6 @@ public final class AccountTokenUsageStore: ObservableObject {
         persistenceGeneration += 1
         for operation in operations.values { operation.task.cancel() }
         operations.removeAll(); snapshots.removeAll(); failures.removeAll(); attemptedAt.removeAll()
-        persistedSnapshots.removeAll(); loadedHomes.removeAll()
+        persistedSnapshots.removeAll(); loadedHomes.removeAll(); loadingHomes.removeAll(); currentAccounts.removeAll()
     }
 }

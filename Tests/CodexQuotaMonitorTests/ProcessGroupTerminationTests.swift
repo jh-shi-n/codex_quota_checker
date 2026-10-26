@@ -18,6 +18,9 @@ final class ProcessGroupTerminationTests: XCTestCase {
         let group = try XCTUnwrap(ProcessGroupTermination.group(of: process))
         let childOutput = pipe.fileHandleForReading.availableData
         let child = try XCTUnwrap(Int32(String(decoding: childOutput, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)))
+        _ = kill(process.processIdentifier, SIGKILL)
+        process.waitUntilExit()
+        XCTAssertEqual(kill(child, 0), 0)
         let started = Date()
         ProcessGroupTermination.terminate(process, group: group, until: Date().addingTimeInterval(0.7))
         var output = Data()

@@ -233,6 +233,65 @@ final class AccountTokenUsageTests: XCTestCase {
         XCTAssertNotNil(store.persistenceError)
     }
 
+    /// 이전 복원 예약 중 다른 슬롯 경로가 변경되어도 유지 계정 디스크 캐시 복원 검증
+    func testRestoreReconfigurationDoesNotLoseUnchangedPendingHome() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("usage.sqlite")
+        let firstHome = directory.appendingPathComponent("one").resolvingSymlinksInPath()
+        let secondHome = directory.appendingPathComponent("two").resolvingSymlinksInPath()
+        let persistence = SQLiteAccountTokenUsageStore(databaseURL: database)
+        let snapshot = try AccountTokenUsage(result: payload(date: "2026-10-23"))
+        try persistence.save(snapshot, home: firstHome.path)
+        let accounts = [AccountState(id: "C1", status: .normal), AccountState(id: "C2", status: .normal)]
+        let store = AccountTokenUsageStore(databaseURL: database)
+        store.restore(accounts: accounts, homes: ["C1": firstHome, "C2": secondHome])
+        store.restore(accounts: accounts, homes: ["C1": firstHome, "C2": directory.appendingPathComponent("new-two")])
+        await store.waitForPersistence()
+        XCTAssertEqual(store.snapshot(for: accounts[0]), snapshot)
+        store.restore(accounts: accounts, homes: ["C1": firstHome, "C2": directory.appendingPathComponent("new-two")])
+        await store.waitForPersistence()
+        XCTAssertEqual(store.snapshot(for: accounts[0]), snapshot)
+    }
+
+    /// 비동기 복원 완료 전 명시적 무효화한 계정의 캐시 재등장 차단
+    func testInvalidatingPendingRestoreDoesNotResurrectSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("usage.sqlite")
+        let home = directory.appendingPathComponent("account").resolvingSymlinksInPath()
+        let persistence = SQLiteAccountTokenUsageStore(databaseURL: database)
+        let snapshot = try AccountTokenUsage(result: payload(date: "2026-10-23"))
+        try persistence.save(snapshot, home: home.path)
+        let account = AccountState(id: "C1", status: .normal)
+        let store = AccountTokenUsageStore(databaseURL: database)
+        store.restore(accounts: [account], homes: ["C1": home])
+        store.invalidate(accountID: account.id)
+        await store.waitForPersistence()
+        XCTAssertNil(store.snapshot(for: account))
+    }
+
+    /// 동일 경로 복원 중 로그인 표시·설정 세대가 갱신되어도 최신 계정 키에 연결 검증
+    func testPendingRestoreUsesLatestAccountIdentityAtCompletion() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("usage.sqlite")
+        let home = directory.appendingPathComponent("account").resolvingSymlinksInPath()
+        let persistence = SQLiteAccountTokenUsageStore(databaseURL: database)
+        let snapshot = try AccountTokenUsage(result: payload(date: "2026-10-23"), accountEmail: "known@example.test")
+        try persistence.save(snapshot, home: home.path)
+        let initial = AccountState(id: "C1", status: .loading)
+        var latest = initial
+        latest.email = "known@example.test"
+        latest.configurationGeneration = 1
+        let store = AccountTokenUsageStore(databaseURL: database)
+        store.restore(accounts: [initial], homes: ["C1": home])
+        store.restore(accounts: [latest], homes: ["C1": home])
+        await store.waitForPersistence()
+        XCTAssertEqual(store.snapshot(for: latest), snapshot)
+        XCTAssertNil(store.snapshot(for: initial))
+    }
+
     /// 날짜가 있는 최소 서버 응답 구성
     private func payload(date: String) -> CodexJSONValue {
         .object(["summary": .object([:]), "dailyUsageBuckets": .array([
