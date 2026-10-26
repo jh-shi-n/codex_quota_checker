@@ -142,7 +142,7 @@ struct AccountTokenUsageView: View {
         }
     }
 
-    /// 기존 잔디 색상 유지 및 서버 미제공 날짜의 점선 테두리 구분
+    /// 잔디 색상·미제공 구분 및 마지막으로 가리킨 날짜 유지
     private func cell(_ day: AccountUsageCalendar.Day, levels: [Int64: TokenContributionIntensity], size: CGFloat) -> some View {
         Button { selectedDate = day.date } label: {
             RoundedRectangle(cornerRadius: 2)
@@ -158,7 +158,6 @@ struct AccountTokenUsageView: View {
         .accessibilityLabel("\(AccountUsageCalendar.label(day.date)) · \(value(day))")
         .onHover { hovering in
             if hovering { selectedDate = day.date }
-            else if selectedDate == day.date { selectedDate = nil }
         }
     }
 
