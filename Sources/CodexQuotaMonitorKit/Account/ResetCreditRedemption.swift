@@ -111,9 +111,10 @@ final class ResetCreditRedemptionStore: ObservableObject {
             case let .failure(error):
                 fields[.status] = .identifier("failed")
                 fields[.failure] = .identifier(Self.failureCode(error))
+                fields[.appErrorCode] = .identifier(error.appErrorCode.rawValue)
                 logger.record(.resetCreditFinished, level: error == .cancelled ? .notice : .error,
                               operationID: operationID, accountID: account.id, fields: fields)
-                messages[key] = "사용 결과를 확인하지 못했습니다. 한도를 새로고침해 주세요. 다시 사용하면 같은 요청으로 확인합니다."
+                messages[key] = error.appErrorCode.message("사용 결과를 확인하지 못했습니다. 한도를 새로고침해 주세요. 다시 사용하면 같은 요청으로 확인합니다.")
             }
         }
     }

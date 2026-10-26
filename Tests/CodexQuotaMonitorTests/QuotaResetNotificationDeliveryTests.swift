@@ -44,7 +44,8 @@ final class QuotaResetNotificationDeliveryTests: XCTestCase {
         backend.deliveryError = StubNotificationError.delivery
         await delivery.notifyScheduled(alert)
         XCTAssertEqual(delivery.status.outcome, .failed)
-        XCTAssertEqual(delivery.status.deliveryError, "모의 알림 전달 오류")
+        XCTAssertTrue(delivery.status.deliveryError?.contains("NTF-001") == true)
+        XCTAssertFalse(delivery.status.deliveryError?.contains("모의 알림 전달 오류") == true)
     }
 
     /// 표시 이름 변경 시 알림 문구만 교체하고 내부 계정 ID 유지 검증
@@ -139,7 +140,8 @@ final class QuotaResetNotificationDeliveryTests: XCTestCase {
         await delivery.notifyReset(makeReset())
 
         XCTAssertEqual(delivery.status.outcome, .fallback)
-        XCTAssertEqual(delivery.status.deliveryError, "모의 알림 전달 오류")
+        XCTAssertTrue(delivery.status.deliveryError?.contains("NTF-001") == true)
+        XCTAssertFalse(delivery.status.deliveryError?.contains("모의 알림 전달 오류") == true)
         XCTAssertEqual(fallbacks.count, 1)
     }
 
@@ -170,7 +172,8 @@ final class QuotaResetNotificationDeliveryTests: XCTestCase {
         await delivery.start()
 
         XCTAssertEqual(delivery.status.authorization, .error)
-        XCTAssertEqual(delivery.status.authorizationError, "모의 권한 조회 오류")
+        XCTAssertTrue(delivery.status.authorizationError?.contains("NTF-001") == true)
+        XCTAssertFalse(delivery.status.authorizationError?.contains("모의 권한 조회 오류") == true)
     }
 
     /// 동시 활성화·권한 버튼 조작에서 진행 중인 권한 요청의 중복 방지 검증
@@ -238,10 +241,12 @@ final class QuotaResetNotificationDeliveryTests: XCTestCase {
             onFallback: { fallbacks.append($0) }
         )
         await delivery.requestAuthorization()
-        XCTAssertEqual(delivery.status.authorizationError, "모의 권한 조회 오류")
+        XCTAssertTrue(delivery.status.authorizationError?.contains("NTF-001") == true)
+        XCTAssertFalse(delivery.status.authorizationError?.contains("모의 권한 조회 오류") == true)
 
         await delivery.notifyReset(makeReset())
-        XCTAssertEqual(delivery.status.authorizationError, "모의 권한 조회 오류")
+        XCTAssertTrue(delivery.status.authorizationError?.contains("NTF-001") == true)
+        XCTAssertFalse(delivery.status.authorizationError?.contains("모의 권한 조회 오류") == true)
         XCTAssertEqual(fallbacks.count, 1)
 
         backend.status = .authorized

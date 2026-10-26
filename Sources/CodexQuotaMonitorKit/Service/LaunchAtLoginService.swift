@@ -20,8 +20,8 @@ public enum LaunchAtLoginError: Error, Equatable, Sendable {
 extension LaunchAtLoginError: LocalizedError {
     public var errorDescription: String? {
         switch self {
-        case let .operationFailed(message):
-            return message
+        case .operationFailed:
+            return AppErrorCode.loginItem.message("로그인 시 자동 실행 설정을 변경하지 못했습니다.")
         }
     }
 }

@@ -156,9 +156,9 @@ public struct OpenAIServiceStatusDetails: View {
                     .foregroundStyle(.secondary)
             }
             if refreshFailed {
-                Text(snapshot == nil
+                Text(AppErrorCode.serviceStatus.message(snapshot == nil
                      ? "상태 조회에 실패했습니다. 다음 할당량 조회 시 다시 확인합니다."
-                     : "최근 갱신에 실패하여 마지막 확인 결과를 표시합니다.")
+                     : "최근 갱신에 실패하여 마지막 확인 결과를 표시합니다."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

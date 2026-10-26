@@ -30,6 +30,11 @@ public enum UsageWindowProbeFailureCategory: String, Codable, Equatable, Sendabl
 
     /// A deliberately generic message suitable for presentation in the app.
     public var userMessage: String {
+        appErrorCode.message(failureSummary)
+    }
+
+    /// CLI 원문을 제외한 실패 원인 안내
+    private var failureSummary: String {
         switch self {
         case .notConfigured:
             return "이 계정은 설정되지 않았습니다."

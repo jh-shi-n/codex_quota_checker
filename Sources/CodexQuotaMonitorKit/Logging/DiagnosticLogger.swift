@@ -163,6 +163,39 @@ public final class DiagnosticLogger: @unchecked Sendable {
         }
     }
 
+    /// 발생 식별자 또는 동일 작업 UUID의 검증된 행만 최대 50개·64KiB 추출
+    public func relatedRecords(occurrenceID: UUID, operationID: UUID? = nil) async -> [String] {
+        await withCheckedContinuation { continuation in
+            storageQueue.async { [self] in
+                var selected: [String] = []
+                withStorageLock { directoryFD in
+                    let rows = readDailyFiles(directoryFD: directoryFD).flatMap(\.rows).sorted { $0.timestamp < $1.timestamp }
+                    for row in rows {
+                        guard let object = try? JSONSerialization.jsonObject(with: row.data) as? [String: Any],
+                              let fields = object["fields"] as? [String: [String: Any]] else { continue }
+                        let request = (fields["requestID"]?["value"] as? String).flatMap(UUID.init(uuidString:))
+                        let operation = (object["operationID"] as? String).flatMap(UUID.init(uuidString:))
+                        guard request == occurrenceID || (operationID != nil && operation == operationID) else { continue }
+                        var safe: [String: Any] = [:]
+                        for key in ["timestamp", "sessionID", "event", "level", "operationID", "accountID"] { safe[key] = object[key] }
+                        safe["fields"] = fields.mapValues { ["type": $0["type"], "value": $0["value"]].compactMapValues { $0 } }
+                        guard let data = try? JSONSerialization.data(withJSONObject: safe, options: [.sortedKeys]),
+                              let line = String(data: data, encoding: .utf8) else { continue }
+                        selected.append(line)
+                    }
+                }
+                var bounded: [String] = []
+                var bytes = 0
+                for line in selected.suffix(50).reversed() {
+                    guard bytes + line.utf8.count + 1 <= 65_536 else { break }
+                    bounded.append(line)
+                    bytes += line.utf8.count + 1
+                }
+                continuation.resume(returning: Array(bounded.reversed()))
+            }
+        }
+    }
+
     /// - 목적: 대기 중인 기록·정리 작업을 제한 시간 내 배출
     /// - 매개변수: timeout — 대기 초, 기본 2초·허용 범위 0–60초
     /// - 반환: 완료 여부, 시간 초과 후에도 기존 큐 작업 지속
@@ -606,7 +639,7 @@ public final class DiagnosticLogger: @unchecked Sendable {
     /// - 목적: 원문 오류 없이 고정 저장 실패 이벤트 출력
     private func reportStorageFailure() {
         guard osLogEnabled else { return }
-        osLogger.error("diagnostic storage unavailable")
+        osLogger.error("LOG-001: diagnostic storage unavailable")
     }
 
     /// - 목적: 유효 식별자만 필드 맵에 반영
@@ -907,6 +940,7 @@ public final class DiagnosticLogger: @unchecked Sendable {
 
 /// - 목적: 고정 진단 이벤트 목록
 public enum DiagnosticEvent: String, CaseIterable, Sendable {
+    case appFailure
     case appStarted
     case appTerminating
     case appWoke
@@ -950,6 +984,7 @@ public enum DiagnosticLevel: String, Sendable {
 
 /// - 목적: 저장을 허용한 진단 필드 목록
 public enum DiagnosticField: String, CaseIterable, Sendable {
+    case appErrorCode
     case generation
     case durationMS
     case exitCode

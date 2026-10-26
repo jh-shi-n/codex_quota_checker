@@ -1,6 +1,7 @@
 // 목적: 업데이트 결과·제한 보관 로그와 설치 앱 준비 신호의 영속 전달
 // 이용처: 업데이트 helper와 다음 앱 실행 사이의 상태 공유
 import Foundation
+import Darwin
 
 /// 사용자 전용 디렉터리에 보관하는 인증정보 없는 업데이트 상태
 public enum AppUpdateState {
@@ -31,6 +32,17 @@ public enum AppUpdateState {
         let status: String
         let version: String
         let code: Int
+        let causeCode: Int?
+        let recovery: String?
+        let notificationRequested: Bool?
+        let occurrenceID: String?
+    }
+
+    /// helper 알림 요청 여부와 다음 실행의 동일 오류 표시 문맥
+    struct FailureNotice: Equatable {
+        let message: String
+        let shouldAlert: Bool
+        let failure: AppOperationFailure
     }
 
     /// 사용자 전용 상태 경로 생성과 이전 로그의 개수·크기 제한
@@ -58,29 +70,86 @@ public enum AppUpdateState {
         try prepareDirectory(directory)
         try? FileManager.default.removeItem(at: directory.appendingPathComponent("result.json"))
         let nonce = UUID().uuidString
+        var committed = false
+        defer { if !committed { cancelPending(nonce: nonce, directory: directory) } }
         let request = Request(nonce: nonce, version: version, target: target.resolvingSymlinksInPath().standardizedFileURL.path)
         try write(request, to: directory.appendingPathComponent("pending.json"))
         let log = directory.appendingPathComponent("attempt-\(nonce).log")
         guard FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
             throw CocoaError(.fileWriteUnknown)
         }
+        committed = true
         return (nonce, log)
     }
 
     /// 종료 결과의 다음 실행 1회 전달과 로그 보존
     static func consumeFailure(directory: URL = directory) -> String? {
+        takeFailure(directory: directory)?.message
+    }
+
+    /// 구버전 숫자 코드·복구 원인 및 알림 요청을 호환 해석하는 단일 소비
+    static func takeFailure(directory: URL = directory) -> FailureNotice? {
         try? prepareDirectory(directory)
         let file = directory.appendingPathComponent("result.json")
         guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 4096,
               let data = try? Data(contentsOf: file), let result = try? JSONDecoder().decode(Outcome.self, from: data) else { return nil }
+        let occurrence = result.occurrenceID.flatMap(UUID.init(uuidString:)) ?? UUID()
+        let done = directory.appendingPathComponent("notification-\(occurrence.uuidString).done")
+        let worker = directory.appendingPathComponent("notification-\(occurrence.uuidString).pid")
+        let deliveryCode = (try? String(contentsOf: done, encoding: .utf8)).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        if result.notificationRequested == true, deliveryCode == nil,
+           let value = try? String(contentsOf: worker, encoding: .utf8),
+           let pid = Int32(value.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1, kill(pid, 0) == 0 {
+            return nil
+        }
         try? FileManager.default.removeItem(at: file)
-        return result.status == "failed" ? "업데이트 설치가 완료되지 않았습니다. 다시 시도해주세요. (오류 \(result.code))" : nil
+        try? FileManager.default.removeItem(at: done)
+        try? FileManager.default.removeItem(at: worker)
+        guard result.status == "failed" else { return nil }
+        let code = AppErrorCode.updateExit(result.code)
+        var message = code.message("업데이트 실패했습니다.")
+        if let cause = result.causeCode, cause != result.code {
+            message += "\n최초 오류코드: \(AppErrorCode.updateExit(cause).rawValue)"
+        }
+        switch result.recovery {
+        case "restored": message += "\n구버전 앱을 복원했습니다. 다시 시도해 주세요."
+        case "backupPreserved": message += "\n원본 백업을 보존했지만 앱을 복원하지 못했습니다."
+        case "launchFailed": message += "\n구버전 파일은 보존했지만 앱을 실행하지 못했습니다."
+        default: break
+        }
+        message += "\n" + code.recoverySuggestion
+        message += "\n발생 식별자: \(occurrence.uuidString)"
+        let failure = AppOperationFailure(code, "업데이트 실패", occurrenceID: occurrence)
+        return FailureNotice(message: message, shouldAlert: deliveryCode != 0, failure: failure)
+    }
+
+    /// 복원 앱이 결과 확정 후 자체 오류 대화상자를 표시할 수 있음을 helper에 전달
+    static func registerFailureObserver(directory: URL = directory) {
+        let pending = directory.appendingPathComponent("pending.json")
+        guard let data = try? Data(contentsOf: pending), data.count <= 4096,
+              let request = try? JSONDecoder().decode(Request.self, from: data), UUID(uuidString: request.nonce) != nil,
+              let executable = Bundle.main.executableURL else { return }
+        let target = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+        guard request.target == target else { return }
+        try? write(Ready(nonce: request.nonce, version: AppVersion.current, target: target,
+                         executable: executable.resolvingSymlinksInPath().standardizedFileURL.path,
+                         pid: ProcessInfo.processInfo.processIdentifier),
+                   to: directory.appendingPathComponent("observer-\(request.nonce).json"))
+    }
+
+    /// 준비 확인 실패·취소에서 현재 요청의 표식만 정리하고 다른 시도 보존
+    static func cancelPending(nonce: String, directory: URL = directory) {
+        let pending = directory.appendingPathComponent("pending.json")
+        guard let data = try? Data(contentsOf: pending), data.count <= 4096,
+              let request = try? JSONDecoder().decode(Request.self, from: data), request.nonce == nonce else { return }
+        try? FileManager.default.removeItem(at: pending)
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("helper-\(nonce).ready"))
     }
 
     /// 앱 초기화 완료 지점에서 요청된 설치 경로·실행 경로·PID·nonce 확인 후 신호 기록
-    public static func publishReadiness() {
+    public static func publishReadiness() throws {
         guard let executable = Bundle.main.executableURL else { return }
-        try? publishReadiness(arguments: ProcessInfo.processInfo.arguments, bundle: Bundle.main.bundleURL,
+        try publishReadiness(arguments: ProcessInfo.processInfo.arguments, bundle: Bundle.main.bundleURL,
             executable: executable, version: AppVersion.current, pid: ProcessInfo.processInfo.processIdentifier)
     }
 

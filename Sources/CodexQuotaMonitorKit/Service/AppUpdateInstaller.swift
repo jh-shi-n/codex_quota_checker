@@ -130,22 +130,54 @@ public enum AppUpdateInstaller {
     }
 
     /// 설치 경로 검증 후 앱 종료를 기다리는 별도 도구 실행
-    public static func launch(_ prepared: PreparedAppUpdate, target: URL = Bundle.main.bundleURL) throws {
+    public static func launch(_ prepared: PreparedAppUpdate, target: URL = Bundle.main.bundleURL) async throws {
+        guard let resource = helperURL else { throw AppUpdateInstallError.helperMissing }
+        try await launchPrepared(prepared, target: target, helper: resource, stateDirectory: AppUpdateState.directory)
+    }
+
+    /// helper 준비 완료 확인 이전 종료 방지 및 격리된 설치 경로 검증 경계
+    static func launchPrepared(_ prepared: PreparedAppUpdate, target: URL, helper resource: URL, stateDirectory: URL) async throws {
+        try Task.checkCancellation()
+        let target = target.resolvingSymlinksInPath().standardizedFileURL
         guard target.lastPathComponent == appName, target.pathExtension == "app",
               FileManager.default.isWritableFile(atPath: target.deletingLastPathComponent().path) else { throw AppUpdateInstallError.notWritable }
-        guard let resource = helperURL else { throw AppUpdateInstallError.helperMissing }
         let helper = prepared.directory.appendingPathComponent("app-update.sh")
-        try FileManager.default.copyItem(at: resource, to: helper)
-        let state = try AppUpdateState.begin(version: prepared.version, target: target)
-        let output = try FileHandle(forWritingTo: state.log)
-        defer { try? output.close() }
+        do { try FileManager.default.copyItem(at: resource, to: helper) }
+        catch { throw AppOperationFailure(.updateHelperStart, "업데이트 설치 도구를 준비하지 못했습니다.", underlying: error) }
+        let state: (nonce: String, log: URL)
+        do { state = try AppUpdateState.begin(version: prepared.version, target: target, directory: stateDirectory) }
+        catch { throw AppOperationFailure(.updateState, "업데이트 상태를 기록하지 못했습니다.", underlying: error) }
         let process = Process()
+        var acknowledged = false
+        defer {
+            if !acknowledged {
+                if process.isRunning { process.terminate() }
+                AppUpdateState.cancelPending(nonce: state.nonce, directory: stateDirectory)
+            }
+        }
+        let output: FileHandle
+        do { output = try FileHandle(forWritingTo: state.log) }
+        catch { throw AppOperationFailure(.updateState, "업데이트 로그를 열지 못했습니다.", underlying: error) }
+        defer { try? output.close() }
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-f", helper.path, String(ProcessInfo.processInfo.processIdentifier), target.path,
-                             prepared.app.path, prepared.directory.path, prepared.version, AppUpdateState.directory.path, state.nonce]
+                             prepared.app.path, prepared.directory.path, prepared.version, stateDirectory.path, state.nonce]
         process.standardOutput = output
         process.standardError = output
-        try process.run()
+        do { try process.run() }
+        catch { throw AppOperationFailure(.updateHelperStart, "업데이트 설치 도구를 실행하지 못했습니다.", underlying: error) }
+        let acknowledgment = stateDirectory.appendingPathComponent("helper-\(state.nonce).ready")
+        for _ in 0..<100 {
+            try Task.checkCancellation()
+            if (try? String(contentsOf: acknowledgment, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) == state.nonce {
+                try Task.checkCancellation()
+                acknowledged = true
+                return
+            }
+            guard process.isRunning else { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw AppOperationFailure(.updateHelperStart, "업데이트 설치 도구가 준비되지 않아 현재 앱을 유지합니다.")
     }
 
     /// SHA-256 표기 및 길이 검증

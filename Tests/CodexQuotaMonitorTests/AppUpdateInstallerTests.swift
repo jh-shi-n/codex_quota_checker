@@ -8,6 +8,23 @@ import XCTest
 
 /// 임시 서명 앱과 실제 보조 스크립트의 파일 작업 검증
 final class AppUpdateInstallerTests: XCTestCase {
+    /// helper가 즉시 실패하면 앱 종료 단계로 넘어가지 않고 준비 상태 정리 검증
+    func testRejectedHelperHandshakeKeepsOriginalAppAndClearsPending() async throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        let invalid = fixture.root.appendingPathComponent("invalid-helper.sh")
+        try Data("#!/bin/zsh\nexit 2\n".utf8).write(to: invalid)
+        let state = fixture.root.appendingPathComponent("HandshakeState")
+        let prepared = PreparedAppUpdate(directory: fixture.workspace, app: fixture.candidate, version: "0.1.0")
+        do {
+            try await AppUpdateInstaller.launchPrepared(prepared, target: fixture.target, helper: invalid, stateDirectory: state)
+            XCTFail("준비 실패 helper 승인")
+        } catch let failure as AppOperationFailure {
+            XCTAssertEqual(failure.code, .updateHelperStart)
+        }
+        XCTAssertEqual(try fixture.version(fixture.target), "0.0.9")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: state.appendingPathComponent("pending.json").path))
+    }
     /// 개발 번들이 있어도 설치 앱의 helper 선택 및 누락 시 혼용 차단 검증
     func testInstalledHelperTakesPriorityAndNeverFallsBackToBuildResources() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -180,6 +197,45 @@ final class AppUpdateInstallerTests: XCTestCase {
             .contains { $0.hasPrefix(".CodexQuotaChecker") })
     }
 
+    /// 신규 실행의 첫 오류 이후 재시도로 업데이트 유지 검증
+    func testTransientLaunchFailureRetriesBeforeRollback() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        XCTAssertEqual(try fixture.executeHelper(failOpen: false, failuresBeforeSuccess: 1), 0)
+        XCTAssertEqual(try fixture.version(fixture.target), "0.1.0")
+        let counter = fixture.root.appendingPathComponent("UpdateState/open-updated.count")
+        XCTAssertEqual(try String(contentsOf: counter, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), "2")
+    }
+
+    /// 복원 앱 실행도 재시도하고 실패 단계·최초 원인·알림 보존 검증
+    func testFailedRecoveryReportsBothCodesAndExternalAlert() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        XCTAssertEqual(try fixture.executeHelper(failOpen: true), 12)
+        XCTAssertEqual(try fixture.version(fixture.target), "0.0.9")
+        let state = fixture.root.appendingPathComponent("UpdateState")
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: state.appendingPathComponent("result.json"))) as? [String: Any])
+        XCTAssertEqual(result["code"] as? Int, 12)
+        XCTAssertEqual(result["causeCode"] as? Int, 4)
+        let message = try XCTUnwrap(AppUpdateState.consumeFailure(directory: state))
+        XCTAssertTrue(message.contains("UPD-012"))
+        XCTAssertTrue(message.contains("UPD-004"))
+        let notification = try String(contentsOf: state.appendingPathComponent("notification.txt"), encoding: .utf8)
+        XCTAssertTrue(notification.contains("업데이트 실패했습니다"))
+        XCTAssertTrue(notification.contains("UPD-012"))
+    }
+
+    /// 복원 실행 요청 성공만으로 미실행 상태를 성공 처리하지 않는지 검증
+    func testRecoveryRequiresActualProcessAfterAcceptedOpen() throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanup() }
+        XCTAssertEqual(try fixture.executeHelper(failOpen: false, showProcess: false), 13)
+        XCTAssertEqual(try fixture.version(fixture.target), "0.0.9")
+        let message = try XCTUnwrap(AppUpdateState.consumeFailure(directory: fixture.root.appendingPathComponent("UpdateState")))
+        XCTAssertTrue(message.contains("UPD-013"))
+        XCTAssertTrue(message.contains("UPD-005"))
+    }
+
     /// 설치 후 실행 실패에서 원본 앱·데이터 복원 및 스테이징 정리 검증
     func testHelperRestoresOriginalAppWhenRelaunchFails() throws {
         let fixture = try InstallerFixture()
@@ -266,7 +322,7 @@ private final class InstallerFixture {
     }
 
     /// 실제 보조 스크립트를 소싱하되 open·프로세스 목록·대기만 테스트 경계로 교체
-    func executeHelper(failOpen: Bool, showProcess: Bool = true, oldProcessAlive: Bool = false, emitReadiness: Bool = true) throws -> Int32 {
+    func executeHelper(failOpen: Bool, showProcess: Bool = true, oldProcessAlive: Bool = false, emitReadiness: Bool = true, failuresBeforeSuccess: Int = 0, rollbackFailures: Int = 0) throws -> Int32 {
         let helper = try XCTUnwrap(AppUpdateInstaller.helperURL)
         let stateDirectory = root.appendingPathComponent("UpdateState")
         let state = try AppUpdateState.begin(version: "0.1.0", target: target, directory: stateDirectory)
@@ -274,19 +330,31 @@ private final class InstallerFixture {
             "executable": target.appendingPathComponent("Contents/MacOS/CodexQuotaMonitor").path, "pid": 2147483646]
         try JSONSerialization.data(withJSONObject: readiness).write(to: stateDirectory.appendingPathComponent("template.json"))
         let script = """
+        function /usr/bin/osascript() { print -r -- "$*" > "$state_directory/notification.txt"; }
         function /usr/bin/open() {
+            local kind="restored"
+            [[ "$*" != *--codex-update-nonce* ]] || kind="updated"
+            local counter="$state_directory/open-$kind.count"
+            local count=0
+            [[ ! -f "$counter" ]] || count="$(<"$counter")"
+            (( count += 1 ))
+            print -r -- "$count" > "$counter"
             \(failOpen ? "return 1" : "")
-            if [[ "$1" == "-n" && "\(emitReadiness ? "yes" : "no")" == "yes" ]]; then
+            if [[ "$kind" == "updated" && "$count" -le \(failuresBeforeSuccess) ]]; then return 1; fi
+            if [[ "$kind" == "restored" && "$count" -le \(rollbackFailures) ]]; then return 1; fi
+            print -r -- "$kind" > "$state_directory/started"
+            if [[ "$kind" == "updated" && "\(emitReadiness ? "yes" : "no")" == "yes" ]]; then
                 /bin/cp "$state_directory/template.json" "$ready"
             fi
             return 0
         }
         function /bin/ps() {
+            [[ -f "$state_directory/started" ]] || return 0
             \(showProcess ? "if [[ \"$1\" == \"-p\" ]]; then builtin print -r -- \"$executable\"; else builtin print -r -- \"2147483646 $executable\"; fi" : "return 0")
         }
         function /bin/sleep() { command /bin/sleep 0.001; }
         function kill() {
-            \(oldProcessAlive ? "return 0" : "if [[ \"$2\" == \"2147483646\" ]]; then return 0; fi; builtin kill \"$@\"")
+            \(oldProcessAlive ? "return 0" : "if [[ \"$2\" == \"2147483646\" ]]; then if [[ \"$1\" != \"-0\" ]]; then /bin/rm -f \"$state_directory/started\"; fi; return 0; fi; builtin kill \"$@\"")
         }
         source "$1" "${@:2}"
         """
@@ -298,6 +366,13 @@ private final class InstallerFixture {
         process.standardError = FileHandle.nullDevice
         try process.run()
         process.waitUntilExit()
+        let notification = stateDirectory.appendingPathComponent("notification-\(state.nonce).done")
+        if FileManager.default.fileExists(atPath: stateDirectory.appendingPathComponent("notification-\(state.nonce).pid").path) {
+            for _ in 0..<100 {
+                if FileManager.default.fileExists(atPath: notification.path) { break }
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+        }
         return process.terminationStatus
     }
 

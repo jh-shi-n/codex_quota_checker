@@ -11,9 +11,20 @@ import CodexQuotaMonitorKit
 
 @main
 enum CodexQuotaMonitorEntryPoint {
+    /// SwiftUI·계정 서비스 생성 전 획득하고 앱 수명 동안 유지하는 실행 잠금
+    @MainActor static let instanceLock = CodexQuotaMonitorAppDelegate.acquireInstanceLock()
     /// macOS 14의 Settings Scene 생성 충돌을 기존 AppKit 수명주기로 우회
     @MainActor
     static func main() {
+        do { try AppStartupValidator.validate() }
+        catch {
+            let failure = (error as? AppOperationFailure) ?? AppOperationFailure(.unexpected, "앱 초기화에 실패했습니다.", underlying: error)
+            failure.record()
+            AppErrorPresenter.present(title: "앱을 실행하지 못했습니다", message: failure.userMessage, failure: failure)
+            DiagnosticLogger.shared.flush(timeout: 1)
+            exit(EXIT_FAILURE)
+        }
+        _ = instanceLock
         if #available(macOS 15.0, *) {
             CodexQuotaMonitorApp.main()
         } else {
@@ -48,7 +59,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let accountStore: AccountStore
     /// 할당량 조회에 동반하여 갱신하는 네 계정 공용 서비스 상태
     let serviceStatus: OpenAIServiceStatusStore
-    let appUpdates = AppUpdateStore()
+    let appUpdates: AppUpdateStore
     let quotaResetNotifications: QuotaResetNotificationService
     /// 안정 관측된 한도의 시각 도달 조회와 사전·도달 시스템 알림 연결
     lazy var quotaResetScheduler = QuotaResetScheduler(
@@ -116,7 +127,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 설정과 계정 서비스 초기화 및 표시·갱신 콜백 연결
     override init() {
-        self.instanceLock = Self.acquireInstanceLock()
+        self.instanceLock = CodexQuotaMonitorEntryPoint.instanceLock
+        self.appUpdates = AppUpdateStore()
         let preferences = PreferencesStore(configurationFile: AppConfigurationFile(fileURL: AppConfigurationFile.defaultFileURL))
         let serviceStatus = OpenAIServiceStatusStore()
         let accountStore = AccountStore(
@@ -358,7 +370,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 설정·타이머 생성 전 중복 진입 차단 및 기존 앱 활성화
-    private static func acquireInstanceLock() -> AppInstanceLock {
+    fileprivate static func acquireInstanceLock() -> AppInstanceLock {
         let lock = AppInstanceLock(fileURL: AppConfigurationFile.defaultFileURL
             .deletingLastPathComponent().appendingPathComponent("instance.lock"))
         do {
@@ -370,8 +382,12 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             }
             exit(EXIT_SUCCESS)
         } catch {
-            let message = "앱 실행 잠금을 확보하지 못했습니다: \(error.localizedDescription)\n"
+            let failure = AppOperationFailure(.instanceLock, "앱 실행 잠금을 확보하지 못했습니다.", underlying: error)
+            failure.record()
+            let message = failure.userMessage
             FileHandle.standardError.write(Data(message.utf8))
+            AppErrorPresenter.present(title: "앱을 실행하지 못했습니다", message: message, failure: failure)
+            DiagnosticLogger.shared.flush(timeout: 1)
             exit(EXIT_FAILURE)
         }
     }
