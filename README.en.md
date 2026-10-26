@@ -5,6 +5,24 @@
 - View quotas and usage for up to four Codex accounts in the macOS menu bar and notch
 - An unofficial, independent app built with Codex
 
+## Screenshots
+
+- Captured from the current UI using sample account and usage data
+
+### Menu bar and notch account display
+
+<img src="assets/screenshots/quota-cluster.png" alt="Account donuts showing remaining quotas and names for two accounts" width="220">
+
+### Account details
+
+- Five-hour and overall quotas, 24-week token usage grid, session activity, and reset-time controls
+
+<img src="assets/screenshots/account-detail.png" alt="Account details showing quota rings and the token usage contribution grid" width="640">
+
+### Settings
+
+<img src="assets/screenshots/settings.png" alt="Settings for automatic refresh intervals and account folders" width="640">
+
 ## Features
 
 | Feature | Description |
