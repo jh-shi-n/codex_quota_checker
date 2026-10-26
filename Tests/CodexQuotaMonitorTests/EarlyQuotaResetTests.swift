@@ -53,7 +53,7 @@ final class EarlyQuotaResetTests: XCTestCase {
         ))
         XCTAssertNil(EarlyQuotaReset.detect(
             previous: snapshot(),
-            current: state(primary: 60, reset: now.addingTimeInterval(7_200)),
+            current: state(primary: 60, reset: now.addingTimeInterval(7_199)),
             now: now
         ))
     }

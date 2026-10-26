@@ -67,13 +67,15 @@ public struct QuotaResetNotificationFallback: Equatable, Sendable {
     public let accountID: String
     public let windowTitles: [String]
     public let isFailure: Bool
+    public let isScheduleChange: Bool
 
     /// 계정·리셋 구간별 대체 표시 정보 생성
-    public init(id: String, accountID: String, windowTitles: [String], isFailure: Bool = false) {
+    public init(id: String, accountID: String, windowTitles: [String], isFailure: Bool = false, isScheduleChange: Bool = false) {
         self.id = id
         self.accountID = accountID
         self.windowTitles = windowTitles
         self.isFailure = isFailure
+        self.isScheduleChange = isScheduleChange
     }
 }
 
@@ -169,28 +171,51 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
 
     /// 조기 리셋 알림 전달 및 실패 이벤트의 노치 대체 표시
     public func notifyReset(_ reset: EarlyQuotaReset, displayName: String? = nil) async {
+        let hasScheduleChange = !reset.scheduleChangedWindows.isEmpty
+        DiagnosticLogContext.record(.quotaResetNotification, accountID: reset.accountID, fields: [
+            .status: .identifier("attempt"), .reason: .identifier(hasScheduleChange ? "schedule_changed" : "reset")
+        ])
         let fallback = QuotaResetNotificationFallback(
             id: UUID().uuidString,
             accountID: reset.accountID,
-            windowTitles: reset.windows.map(\.title)
+            windowTitles: reset.windows.map { window in
+                hasScheduleChange
+                    ? "\(window.title) \(reset.scheduleChangedWindows.contains(window) ? "초기화 일정 변경" : "조기 초기화")"
+                    : window.title
+            },
+            isScheduleChange: hasScheduleChange
         )
         let name = AccountDisplayName.resolved(displayName, slotID: reset.accountID)
-        let body = "\(name)의 \(fallback.windowTitles.joined(separator: ", "))가 예정 시각보다 일찍 초기화되었습니다."
+        let recovered = reset.windows.filter { !reset.scheduleChangedWindows.contains($0) }
+        var messages: [String] = []
+        if !recovered.isEmpty {
+            messages.append("\(name)의 \(recovered.map(\.title).joined(separator: ", "))가 예정 시각보다 일찍 초기화되었습니다.")
+        }
+        if hasScheduleChange {
+            messages.append("\(name)의 주간 한도 초기화 예정 시각이 크게 변경되었습니다.")
+        }
+        let body = messages.joined(separator: " ")
 
         guard await isAuthorizedForDelivery() else {
             status = replacingDelivery(outcome: .fallback, error: nil)
             onDiagnostic("reset_fallback_authorization_unavailable")
+            DiagnosticLogContext.record(.quotaResetNotification, accountID: reset.accountID,
+                fields: [.status: .identifier("fallback"), .reason: .identifier("authorization_unavailable")])
             onFallback(fallback)
             return
         }
 
         do {
-            try await backend?.deliver(title: "할당량 조기 리셋", body: body)
+            try await backend?.deliver(title: hasScheduleChange ? "할당량 초기화 일정 변경" : "할당량 조기 리셋", body: body)
             status = replacingDelivery(outcome: .delivered, error: nil)
             onDiagnostic("reset_notification_delivered")
+            DiagnosticLogContext.record(.quotaResetNotification, accountID: reset.accountID,
+                fields: [.status: .identifier("delivered")])
         } catch {
             status = replacingDelivery(outcome: .fallback, error: AppOperationFailure(.notificationDelivery, "시스템 알림 처리에 실패했습니다.", underlying: error).localizedDescription)
             onDiagnostic("reset_fallback_delivery_failed")
+            DiagnosticLogContext.record(.quotaResetNotification, accountID: reset.accountID,
+                fields: [.status: .identifier("fallback"), .reason: .identifier("delivery_failed")])
             onFallback(fallback)
         }
     }

@@ -971,6 +971,7 @@ public enum DiagnosticEvent: String, CaseIterable, Sendable {
     case automaticResetPingAttempt
     case automaticResetPingFinished
     case quotaResetDetected
+    case quotaResetNotification
     case resetObservationUpdated
     case resetConfirmationUpdated
 }
