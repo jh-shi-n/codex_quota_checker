@@ -8,6 +8,23 @@ import XCTest
 
 /// 임시 서명 앱과 실제 보조 스크립트의 파일 작업 검증
 final class AppUpdateInstallerTests: XCTestCase {
+    /// 개발 번들이 있어도 설치 앱의 helper 선택 및 누락 시 혼용 차단 검증
+    func testInstalledHelperTakesPriorityAndNeverFallsBackToBuildResources() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let bundle = root.appendingPathComponent("CodexQuotaMonitor_CodexQuotaMonitorKit.bundle")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = bundle.appendingPathComponent("app-update.sh")
+        try Data("installed helper".utf8).write(to: helper)
+        let selected = try XCTUnwrap(AppUpdateInstaller.helperResourceURL(installedResources: root, isApplication: true))
+        XCTAssertEqual(selected.standardizedFileURL, helper.standardizedFileURL)
+        XCTAssertEqual(try String(contentsOf: selected, encoding: .utf8), "installed helper")
+        let missing = root.appendingPathComponent("missing")
+        XCTAssertNil(AppUpdateInstaller.helperResourceURL(installedResources: missing, isApplication: true))
+        XCTAssertNil(AppUpdateInstaller.helperResourceURL(installedResources: nil, isApplication: true))
+        XCTAssertNotNil(AppUpdateInstaller.helperResourceURL(installedResources: missing, isApplication: false))
+    }
+
     /// 같은 metadata SHA로 바꾼 ZIP도 고정 서명키 없이는 설치 불가 검증
     func testIndependentReleaseSignatureRejectsTamperingAndOtherKeys() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -101,6 +118,9 @@ final class AppUpdateInstallerTests: XCTestCase {
         let resources = prepared.app.appendingPathComponent("Contents/Resources/CodexQuotaMonitor_CodexQuotaMonitorKit.bundle")
         XCTAssertTrue(FileManager.default.fileExists(atPath: resources.path))
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: prepared.app.appendingPathComponent("Contents/MacOS/CodexQuotaMonitor").path))
+        let helper = try XCTUnwrap(AppUpdateInstaller.helperResourceURL(
+            installedResources: prepared.app.appendingPathComponent("Contents/Resources"), isApplication: true))
+        XCTAssertEqual(helper.standardizedFileURL, resources.appendingPathComponent("app-update.sh").standardizedFileURL)
     }
 
     /// 정상 SHA-256 허용과 파일 변조·크기 불일치·검증 정보 누락 차단 검증

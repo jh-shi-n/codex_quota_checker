@@ -34,7 +34,19 @@ public struct PreparedAppUpdate: Sendable {
 public enum AppUpdateInstaller {
     public static let bundleIdentifier = "com.example.codexquotamonitor"
     public static let appName = "CodexQuotaChecker.app"
-    static var helperURL: URL? { Bundle.module.url(forResource: "app-update", withExtension: "sh") }
+    static var helperURL: URL? { helperResourceURL() }
+
+    /// 설치 앱의 helper 고정 및 개발 빌드 리소스와의 버전 혼용 차단
+    static func helperResourceURL(installedResources: URL? = Bundle.main.resourceURL,
+                                  isApplication: Bool = Bundle.main.bundleURL.pathExtension == "app") -> URL? {
+        if let resources = installedResources,
+           let bundle = Bundle(url: resources.appendingPathComponent("CodexQuotaMonitor_CodexQuotaMonitorKit.bundle")),
+           let helper = bundle.url(forResource: "app-update", withExtension: "sh") {
+            return helper
+        }
+        guard !isApplication else { return nil }
+        return Bundle.module.url(forResource: "app-update", withExtension: "sh")
+    }
 
     /// GitHub 배포 파일 다운로드 후 메인 실행 흐름 밖에서 검증·압축 해제
     public static func prepare(_ release: AppRelease, installedVersion: String) async throws -> PreparedAppUpdate {
