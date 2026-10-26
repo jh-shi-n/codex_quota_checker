@@ -9,7 +9,7 @@
 	<key>CFBundleExecutable</key>
 	<string>CodexQuotaMonitor</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.example.codexquotamonitor</string>
+	<string>com.jh-shi-n.codexquotamonitor</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

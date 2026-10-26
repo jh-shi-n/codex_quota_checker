@@ -32,7 +32,7 @@ public struct PreparedAppUpdate: Sendable {
 
 /// 인증 정보와 사용자 데이터에 접근하지 않는 앱 번들 전용 업데이트
 public enum AppUpdateInstaller {
-    public static let bundleIdentifier = "com.example.codexquotamonitor"
+    public static let bundleIdentifier = "com.jh-shi-n.codexquotamonitor"
     public static let appName = "CodexQuotaChecker.app"
     static var helperURL: URL? { helperResourceURL() }
 
