@@ -14,7 +14,7 @@ final class QuotaPresentationTests: XCTestCase {
             result: UsageWindowProbeResult(accountID: "C1", status: .success, startedAt: now, completedAt: now),
             quotaRefreshSucceeded: true, resetConfirmation: confirmation)
         let section = UsageWindowProbeSection(account: account, probe: presentation)
-        XCTAssertEqual(section.resultText, "전송 완료 · 5시간 고정 관측 · 주간 변동 중")
+        XCTAssertEqual(section.resultText, "전송 완료 · 5시간 할당량 시간 고정 · 주간 변동 중")
     }
 
     /// 후속 조회 대기 중 전송 완료와 추가 소비 없는 확인 단계 표시 검증

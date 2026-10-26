@@ -1,6 +1,6 @@
-// 목적: 기존 잔디·주간 차트 구성으로 서버 계정 토큰 합계 표시
+// 목적: 서버 사용량과 당일 로컬 보완값의 잔디·주간 차트 표시
 // 이용처: 계정 상세의 유일한 토큰 사용량 영역
-// 사용방법: 서버 저장소와 차트 옵션 전달; 당일 미제공 시 연결 계정 로컬값 보완
+// 사용방법: 계정 저장소와 차트 옵션 전달; 제목 옆 도움말에 집계 기준·조회 상태 표시
 import Charts
 import SwiftUI
 
@@ -28,10 +28,40 @@ struct AccountTokenUsageView: View {
     }
     private var week: [AccountUsageCalendar.Day] { model.week(offset: weekOffset) }
 
+    /// 집계 기준과 하단에서 분리한 조회 상태·오류 안내 구성
+    private var usageHelp: String {
+        var lines = [
+            "오늘 사용량: 서버 값을 우선하고, 없으면 연결 계정의 로컬 세션 기록으로 보완",
+            "이전 날짜 사용량: 서버가 제공한 일별 사용량 기준",
+            "누적·일 최대 토큰: 서버 집계 기준",
+            "날짜는 UTC 기준이며, 미제공 내역은 0과 구분합니다."
+        ]
+        if model.day(at: nil).isLocal, let localToday {
+            lines.append("로컬 조회 \(AccountDashboardFormatting.dateText(localToday.generatedAt, dateStyle: .short, timeStyle: .short))")
+        } else if model.day(at: nil).tokens == nil {
+            lines.append(store.isLoading(for: account) ? "오늘의 로컬 사용량을 불러오는 중입니다." : "오늘의 로컬 사용량을 확인하지 못했습니다.")
+        }
+        if snapshot?.days == nil {
+            lines.append("서버에서 일별 내역을 제공하지 않았습니다.")
+        } else if snapshot?.days?.isEmpty == true {
+            lines.append("서버가 반환한 일별 내역이 없습니다.")
+        }
+        if store.hasFailed(for: account) {
+            lines.append(snapshot == nil ? "서버 사용량 조회 실패 · CLI 버전·로그인 방식에 따라 제공되지 않을 수 있습니다." : "서버 갱신 실패 · 마지막 정상 결과 표시 중")
+        }
+        if let error = store.persistenceError { lines.append(error) }
+        return lines.joined(separator: "\n")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text("계정 토큰 사용량").font(.headline.weight(.semibold))
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                    .help(usageHelp)
+                    .accessibilityLabel("토큰 사용량 안내")
+                    .accessibilityValue(usageHelp)
                 if !options.weeklyChartEnabled { Text("(최근 24주)").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
             }
@@ -45,29 +75,11 @@ struct AccountTokenUsageView: View {
                     Text("서버 조회 \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
                     .font(.caption2).foregroundStyle(.secondary)
                 }
-                if model.day(at: nil).isLocal, let localToday {
-                    Text("오늘은 연결 계정의 로컬 기록으로 표시 · 조회 \(AccountDashboardFormatting.dateText(localToday.generatedAt, dateStyle: .short, timeStyle: .short))")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                if snapshot?.days == nil {
-                    Text("서버에서 일별 내역을 제공하지 않았습니다.").font(.caption).foregroundStyle(.secondary)
-                } else if snapshot?.days?.isEmpty == true {
-                    Text("서버가 반환한 일별 내역이 없습니다.").font(.caption).foregroundStyle(.secondary)
-                }
             } else {
                 Text(store.isLoading(for: account) ? "계정 토큰 사용량을 불러오는 중…" : "우상단 새로고침을 눌러 계정 토큰 사용량을 확인하세요.")
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 90, alignment: .leading)
             }
-            if store.hasFailed(for: account) {
-                Text(snapshot == nil ? "서버 사용량 조회 실패 · CLI 버전·로그인 방식에 따라 제공되지 않을 수 있습니다." : "갱신 실패 · 마지막 정상 결과 표시 중")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if let error = store.persistenceError {
-                Text(error).font(.caption).foregroundStyle(.secondary)
-            }
-            Text("서버 우선 · 오늘 미제공 시 연결 계정 로컬 집계 · 날짜는 UTC 기준")
-                .font(.caption2).foregroundStyle(.secondary)
         }
         .environment(\.calendar, AccountUsageCalendar.calendar)
         .environment(\.timeZone, AccountUsageCalendar.calendar.timeZone)

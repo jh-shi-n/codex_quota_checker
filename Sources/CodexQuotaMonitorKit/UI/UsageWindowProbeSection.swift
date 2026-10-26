@@ -202,7 +202,7 @@ public struct UsageWindowProbeSection: View {
         }
         if result.isSuccess, probe?.quotaRefreshSucceeded == true {
             if account.primaryResetObservation == .stableObserved && account.secondaryResetObservation == .stableObserved {
-                return "전송 완료 · 시각 고정 관측"
+                return "전송 완료 · 할당량 시간 고정"
             }
             return "전송 완료 · 시각 확인 중"
         }
