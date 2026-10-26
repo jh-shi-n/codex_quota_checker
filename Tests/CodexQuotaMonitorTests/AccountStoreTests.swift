@@ -4,6 +4,37 @@ import XCTest
 
 @MainActor
 final class AccountStoreTests: XCTestCase {
+    /// 최초 대기에는 회전 표시 없이 새로고침 허용, 실제 요청 중에만 로딩 전환 검증
+    func testInitialWaitingBecomesLoadingOnlyWhenRefreshStarts() async throws {
+        let gate = AccountLoaderProbe()
+        let configs = makeConfigs()
+        let defaults = UserDefaults(suiteName: "CodexQuotaMonitorTests.\(UUID().uuidString)")!
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferences = PreferencesStore(userDefaults: defaults, defaultPaths: configs.map { $0.home.path },
+            quotaDatabaseURL: root.appendingPathComponent("quota.sqlite"))
+        let store = AccountStore(configs: configs, preferencesStore: preferences) { config in
+            await gate.started(config.id)
+            await gate.waitUntilReleased()
+            return AccountState(id: config.id, usedPercent: 12, status: .normal)
+        }
+        let initial = try XCTUnwrap(store.state(for: "C1"))
+        XCTAssertTrue(initial.isWaitingForRefresh)
+        XCTAssertFalse(initial.isRefreshing)
+        XCTAssertEqual(AccountDetailView.statusText(for: initial), "조회 대기")
+        XCTAssertFalse(QuotaDonutState(account: initial).isLoading)
+        let task = Task { await store.refresh(accountID: "C1") }
+        await gate.waitForStartedCount(1)
+        let active = try XCTUnwrap(store.state(for: "C1"))
+        XCTAssertFalse(active.isWaitingForRefresh)
+        XCTAssertTrue(active.isRefreshing)
+        XCTAssertEqual(AccountDetailView.statusText(for: active), "Loading")
+        await gate.release()
+        await task.value
+        XCTAssertEqual(store.state(for: "C1")?.status, .normal)
+        XCTAssertEqual(store.state(for: "C1")?.isRefreshing, false)
+    }
+
     /// Ping 이후 강제 조회를 자동 조회가 공유해도 양쪽 호출의 성공 유지
     func testForcedRefreshAndAutomaticRefreshShareSuccess() async {
         let gate = AccountLoaderProbe()
@@ -459,6 +490,9 @@ final class AccountStoreTests: XCTestCase {
         }
         let restored = restartedStore.state(for: "C1")
         XCTAssertEqual(restored?.status, .loading)
+        XCTAssertEqual(restored?.isWaitingForRefresh, true)
+        XCTAssertEqual(restored?.isRefreshing, false)
+        XCTAssertEqual(restored.map { AccountDetailView.statusText(for: $0) }, "조회 대기")
         XCTAssertEqual(restored?.usedPercent, 37)
         XCTAssertEqual(restored?.remainingPercent, 63)
         XCTAssertEqual(restored?.resetAt, resetDate)

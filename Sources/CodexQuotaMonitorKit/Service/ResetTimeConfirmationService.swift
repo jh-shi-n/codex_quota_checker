@@ -66,12 +66,13 @@ public final class ResetTimeConfirmationService {
         var succeeded = false
         var queries = 0
         var isCurrent = true
+        var identity = account
         for attempt in 0...3 {
             if attempt > 0 {
                 do { try await sleep(10) }
                 catch { isCurrent = false; break }
             }
-            guard !Task.isCancelled, let active = current(account.id), sameIdentity(account, active),
+            guard !Task.isCancelled, let active = current(account.id), sameIdentity(identity, active),
                   ![.notConfigured, .loginRequired, .codexNotFound].contains(active.status) else {
                 isCurrent = false
                 break
@@ -81,12 +82,12 @@ public final class ResetTimeConfirmationService {
             if primary == .superseded && secondary == .superseded { break }
             let fresh = await refresh(account.id)
             queries += 1
-            guard !Task.isCancelled, let active = current(account.id), sameIdentity(account, active),
+            guard !Task.isCancelled, let active = current(account.id), sameIdentity(identity, active),
                   ![.notConfigured, .loginRequired, .codexNotFound].contains(active.status) else {
                 isCurrent = false
                 break
             }
-            if let fresh, !sameIdentity(account, fresh) { isCurrent = false; break }
+            if let fresh, !sameIdentity(identity, fresh) || !sameIdentity(fresh, active) { isCurrent = false; break }
             // 조회 시각의 단조 증가를 확인하여 재사용 응답을 관측 근거에서 제외
             if let fresh, let updated = fresh.lastUpdated {
                 succeeded = fresh.status == .normal && active.status == .normal && abs(updated.timeIntervalSince(now())) <= 30
@@ -94,6 +95,7 @@ public final class ResetTimeConfirmationService {
                     && (active.lastUpdated.map { updated >= $0 } ?? true)
             } else { succeeded = false }
             if succeeded, let fresh {
+                identity = fresh
                 if fresh.primaryResetSegmentID != active.primaryResetSegmentID { primary = .superseded }
                 if fresh.secondaryResetSegmentID != active.secondaryResetSegmentID { secondary = .superseded }
                 latest = fresh
@@ -133,7 +135,6 @@ public final class ResetTimeConfirmationService {
 
     /// 전송 대상 계정의 경로 세대·로그인·구독 일치 확인
     private func sameIdentity(_ lhs: AccountState, _ rhs: AccountState) -> Bool {
-        lhs.id == rhs.id && lhs.configurationGeneration == rhs.configurationGeneration
-            && lhs.email == rhs.email && lhs.planType == rhs.planType
+        lhs.acceptsIdentity(of: rhs)
     }
 }

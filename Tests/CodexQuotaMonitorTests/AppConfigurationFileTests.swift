@@ -216,6 +216,7 @@ final class AppConfigurationFileTests: XCTestCase {
             var settings = payload(paths: [root.path, "", "", ""])
             settings.accountDisplayNames = ["C1": "업무", "C3": "Café"]
             settings.automaticResetPingEnabled = true
+            settings.automaticRefreshEnabled = false
             try file.saveSettings(settings)
             try file.saveInstallation(history)
             XCTAssertEqual(try file.read()?.settings, settings)
@@ -436,7 +437,7 @@ final class AppConfigurationFileTests: XCTestCase {
     /// 저장 허용 목록의 명시적 외부 계약
     private var allowedSettingFields: Set<String> {
         ["accountPaths", "enabledAccountIDs", "accountDisplayOrder", "refreshIntervalMinutes",
-         "resetReminderMinutes", "activityNotificationDurationSeconds", "showAccountLabels", "launchAtLogin", "accountDisplayNames", "tokenUsageOptions", "automaticResetPingEnabled"]
+         "resetReminderMinutes", "activityNotificationDurationSeconds", "showAccountLabels", "launchAtLogin", "accountDisplayNames", "tokenUsageOptions", "automaticResetPingEnabled", "automaticRefreshEnabled"]
     }
 
     /// 인증정보 없는 이전 설정 파일의 기본 테스트 자료 생성

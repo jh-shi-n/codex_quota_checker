@@ -5,15 +5,22 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     public let id: String
     /// 경로 변경 시 상세 화면 상태를 분리하는 비영속 슬롯 세대
     public var configurationGeneration = 0
+    /// 최초 조회 전 대기와 실제 로딩의 비영속 구분
+    public var isWaitingForRefresh = false
+    public var isResetVerificationPending = false
+    public var isRefreshing: Bool { status == .loading && !isWaitingForRefresh }
     /// 서버의 통합 리셋권 잔여 개수와 선택적 소멸일 목록
     public var resetCredits: RateLimitResetCredits?
     public var email: String?
     public var planType: String?
     public var primaryResetAt: Date?
     public var secondaryResetAt: Date?
-    /// 영속 스냅샷과 분리한 현재 실행의 초기화 시각 관측
+    /// 현재 조회와 유효한 저장 근거에서 도출한 초기화 시각 관측
     public var primaryResetObservation: ResetTimeObservation = .checking
     public var secondaryResetObservation: ResetTimeObservation = .checking
+    /// 경로별 캐시에서 복원한 현재 구간의 고정 관측 근거
+    public var primaryResetEvidence: ResetTimeEvidence?
+    public var secondaryResetEvidence: ResetTimeEvidence?
     /// 현재 실행의 한도별 관측 구간; 영속 캐시·재실행 간 재사용 제외
     public var primaryResetSegmentID: UUID?
     public var secondaryResetSegmentID: UUID?
@@ -122,6 +129,13 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
 
     public static func loading(id: String) -> AccountState {
         AccountState(id: id, status: .loading)
+    }
+
+    /// 캐시 로딩의 식별 정보 최초 보완 허용; 기존 로그인·구독·경로 세대 변경 차단
+    public func acceptsIdentity(of other: AccountState) -> Bool {
+        guard id == other.id, configurationGeneration == other.configurationGeneration else { return false }
+        if status == .loading, email == nil, planType == nil { return true }
+        return email == other.email && planType == other.planType
     }
 
     public static func notConfigured(id: String) -> AccountState {

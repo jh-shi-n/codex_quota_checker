@@ -27,7 +27,7 @@ public struct QuotaResetChange: Equatable, Sendable {
             let oldUsed = window == .primary ? previous.primaryUsedPercent : previous.secondaryUsedPercent
             let used = window == .primary ? current.primaryUsedPercent : current.secondaryUsedPercent
             guard let oldReset, oldReset.timeIntervalSince1970.isFinite else { return nil }
-            let recovered = oldUsed.flatMap { old in used.map { $0 < old && ($0 == 0 || reset.map { $0 > oldReset.addingTimeInterval(2) } == true) } } == true
+            let recovered = oldUsed.flatMap { old in used.map { $0 < old && ($0 == 0 || reset.map { $0 > oldReset.addingTimeInterval(ResetTimeTracker.resetTolerance) } == true) } } == true
             if recovered {
                 let cause: Cause = evidence == .used ? .resetCredit : (oldReset <= now ? .scheduled : .unknown)
                 return Self(window: window, kind: .reset, cause: cause, previousReset: oldReset, currentReset: reset)
@@ -35,8 +35,9 @@ public struct QuotaResetChange: Equatable, Sendable {
             guard let reset, reset.timeIntervalSince1970.isFinite else { return nil }
             let delta = reset.timeIntervalSince(oldReset)
             let elapsed = current.lastUpdated.flatMap { latest in previous.lastUpdated.map { latest.timeIntervalSince($0) } }
-            guard abs(delta) > 2, elapsed.map({ abs(delta - $0) > 2 }) ?? true else { return nil }
-            return Self(window: window, kind: .scheduleChanged, cause: .unknown, previousReset: oldReset, currentReset: reset)
+            guard abs(delta) > ResetTimeTracker.resetTolerance,
+                  elapsed.map({ abs(delta - $0) > ResetTimeTracker.resetTolerance }) ?? true else { return nil }
+            return Self(window: window, kind: .scheduleChanged, cause: evidence == .used ? .resetCredit : .unknown, previousReset: oldReset, currentReset: reset)
         }
     }
 }

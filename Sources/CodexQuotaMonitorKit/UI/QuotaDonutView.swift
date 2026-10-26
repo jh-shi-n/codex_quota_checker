@@ -26,7 +26,7 @@ public enum QuotaDonutState: Equatable, Sendable {
             } else if let remaining = account.fiveHourRemainingPercent {
                 self = .fiveHourOnly(QuotaColors.clampedPercent(remaining))
             } else {
-                self = .loading
+                self = account.isWaitingForRefresh ? .notConfigured : .loading
             }
         case .loginRequired:
             self = .loginRequired
@@ -332,6 +332,9 @@ public struct QuotaDonutView: View {
         let overall = presentation.ringPercent.map(Self.percentText) ?? "—"
         let name = AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id)
         let quotaText = "5h \(fiveHour) · Overall \(overall)"
+        if account.status == .loading && account.isWaitingForRefresh {
+            return "\(name) · \(quotaText) · 조회 대기"
+        }
         switch state {
         case .value, .fiveHourOnly:
             return "\(name) · \(quotaText)"

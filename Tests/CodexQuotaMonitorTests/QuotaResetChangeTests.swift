@@ -10,6 +10,20 @@ import XCTest
 final class QuotaResetChangeTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// 사용량 회복이 없어도 일정 변경과 유효 리셋권 소모가 함께 있으면 원인 분류 검증
+    func testScheduleChangeWithCreditUseHasCreditCause() {
+        var before = state(elapsed: 0)
+        before.resetCredits = RateLimitResetCredits(availableCount: 1, credits: [
+            .init(id: "fixture", expiresAt: start.addingTimeInterval(600))
+        ])
+        var after = state(elapsed: 10)
+        after.primaryResetAt = start.addingTimeInterval(25_000)
+        after.resetCredits = RateLimitResetCredits(availableCount: 0)
+        let changes = QuotaResetChange.detect(previous: before, current: after, now: start.addingTimeInterval(10))
+        XCTAssertEqual(changes.first?.kind, .scheduleChanged)
+        XCTAssertEqual(changes.first?.cause, .resetCredit)
+    }
+
     /// 리셋권 응답 부재에도 실제 회복 감지 및 원인 미상 분류 검증
     func testMissingCreditsDoNotSuppressExternalReset() {
         let before = state(elapsed: 0)

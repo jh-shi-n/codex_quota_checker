@@ -113,6 +113,7 @@ public struct SettingsView: View {
 
     @Binding public var tokenUsageOptions: TokenUsageOptions
     @Binding public var refreshIntervalMinutes: Int
+    @Binding public var automaticRefreshEnabled: Bool
     @Binding public var resetReminderMinutes: Int
     @Binding public var accountPaths: [String]
     @Binding public var accountDisplayNames: [String: String]
@@ -154,6 +155,7 @@ public struct SettingsView: View {
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
         accountDisplayNames: Binding<[String: String]> = .constant([:]),
+        automaticRefreshEnabled: Binding<Bool> = .constant(true),
         resetReminderMinutes: Binding<Int> = .constant(5),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
@@ -164,6 +166,7 @@ public struct SettingsView: View {
     ) {
         self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
+        self._automaticRefreshEnabled = automaticRefreshEnabled
         self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = accountPaths
         self._launchAtLogin = launchAtLogin
@@ -209,6 +212,7 @@ public struct SettingsView: View {
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
         accountDisplayNames: Binding<[String: String]> = .constant([:]),
+        automaticRefreshEnabled: Binding<Bool> = .constant(true),
         resetReminderMinutes: Binding<Int> = .constant(5),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
@@ -219,6 +223,7 @@ public struct SettingsView: View {
     ) {
         self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
+        self._automaticRefreshEnabled = automaticRefreshEnabled
         self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = Binding(
             get: {
@@ -266,6 +271,9 @@ public struct SettingsView: View {
         ScrollView {
             Form {
                 Section(Self.refreshSectionTitle) {
+                    Toggle("주기 조회", isOn: $automaticRefreshEnabled)
+                    Text("앱 시작 시 확인과 수동 새로고침은 주기 조회를 꺼도 실행됩니다.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Picker("새로고침 간격", selection: refreshIntervalBinding) {
                         if !Self.refreshIntervalOptions.contains(refreshIntervalMinutes) {
                             Text("직접 입력: \(refreshIntervalMinutes)분").tag(refreshIntervalMinutes)

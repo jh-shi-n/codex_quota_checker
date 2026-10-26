@@ -53,7 +53,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     lazy var quotaResetScheduler = QuotaResetScheduler(
         refresh: { [weak self] id in
             guard let self else { return nil }
-            await self.accountStore.refresh(accountID: id, forceFresh: true)
+            await self.quotaMonitoring.checks.refresh(accountID: id)
             return self.accountStore.state(for: id)
         },
         notify: { [weak self] alert in
@@ -81,7 +81,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             )
         }
     )
-    let refreshService: RefreshService
+    let quotaMonitoring: QuotaMonitoringController
     /// 전송과 후속 관측을 합친 계정별 중복 실행 차단
     var runningProbeAccountIDs: Set<String> = []
     /// 수동·자동 Ping이 공통으로 사용하는 시각 고정 확인
@@ -122,12 +122,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             configs: AccountConfig.accounts(for: preferences.accountPaths),
             preferencesStore: preferences
         )
-        let refreshService = RefreshService(
-            intervalMinutes: preferences.refreshIntervalMinutes,
-            refresh: { [weak accountStore] in
-                await accountStore?.refreshAll()
-            }
-        )
+        let quotaMonitoring = QuotaMonitoringController(store: accountStore, preferences: preferences)
         let launchAtLoginService = LaunchAtLoginService()
         let sessionActivityProvider = SQLiteSessionActivityProvider()
         let usageWindowProbeService = UsageWindowProbeService()
@@ -176,7 +171,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         self.accountStore = accountStore
         self.serviceStatus = serviceStatus
         self.quotaResetNotifications = quotaResetNotifications
-        self.refreshService = refreshService
+        self.quotaMonitoring = quotaMonitoring
         self.launchAtLoginService = launchAtLoginService
         self.sessionActivityProvider = sessionActivityProvider
         self.usageWindowProbeService = usageWindowProbeService
@@ -205,10 +200,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     notchLayoutManager.show()
                 },
                 startRefresh: {
-                    refreshService.start()
+                    quotaMonitoring.launch()
                 },
                 stopRefresh: {
-                    refreshService.stop()
+                    quotaMonitoring.stop()
                 },
                 hidePanels: {
                     notchLayoutManager.hide()
@@ -220,10 +215,11 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     _ = notchLayoutManager.screenDidChange()
                 },
                 refreshNow: {
-                    await refreshService.refreshNow()
+                    guard preferences.automaticRefreshEnabled, !quotaMonitoring.isStarting else { return }
+                    await quotaMonitoring.checks.refreshAll()
                 },
                 restartRefresh: { minutes in
-                    refreshService.restart(intervalMinutes: minutes)
+                    quotaMonitoring.restart(minutes: minutes)
                 },
                 reconfigurePaths: { paths in
                     let generation = sessionActivityDelivery.pause()
@@ -250,9 +246,21 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
         super.init()
 
+        quotaMonitoring.onStartupFinished = { [weak self] in
+            guard let self, self.preferences.automaticRefreshEnabled else { return }
+            self.quotaResetScheduler.start()
+        }
+
+        preferences.onAutomaticRefreshChanged = { [weak self] enabled in
+            guard let self else { return }
+            self.quotaMonitoring.setEnabled(enabled)
+            if enabled && !self.quotaMonitoring.isStarting { self.quotaResetScheduler.start() }
+            else { self.quotaResetScheduler.stop() }
+        }
+
         preferences.onAutomaticResetPingChanged = { [weak self] enabled in
             guard let self else { return }
-            self.automaticResetPing.reconcile(states: self.accountStore.states, enabled: enabled)
+            self.automaticResetPing.reconcile(states: self.accountStore.states, enabled: enabled && !self.quotaMonitoring.isStarting)
             if enabled, self.quotaResetNotifications.delivery.status.authorization == .notRequested {
                 self.quotaResetNotifications.retryAuthorization()
             }
@@ -343,7 +351,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             self?.quotaResetScheduler.reconcile(
                 states: states, reminderMinutes: preferences.resetReminderMinutes
             )
-            self?.automaticResetPing.reconcile(states: states, enabled: preferences.automaticResetPingEnabled)
+            self?.automaticResetPing.reconcile(states: states, enabled: preferences.automaticResetPingEnabled && !(self?.quotaMonitoring.isStarting ?? true))
             self?.render(states: states)
         }
     }
@@ -388,9 +396,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 공용 새로고침에서 할당량 조회 후 최신 계정 식별자로 토큰 사용량 갱신
     private func refreshAccount(_ id: String) {
+        guard let account = accountStore.state(for: id), ManualRequestGate.shared.allow(account) else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.accountStore.refresh(accountID: id)
+            await self.quotaMonitoring.checks.refresh(accountID: id)
             guard let account = self.accountStore.state(for: id) else { return }
             await AccountTokenUsageStore.shared.refresh(for: account, force: true)?.value
         }

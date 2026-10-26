@@ -19,6 +19,7 @@ public struct AppPreferencesPayload: Codable, Equatable, Sendable {
     public var tokenUsageOptions: TokenUsageOptions? = nil
     /// 이전 설정의 필드 누락은 자동 Ping 미사용으로 처리
     public var automaticResetPingEnabled: Bool? = nil
+    public var automaticRefreshEnabled: Bool? = nil
 
     /// 기존 정규화 경로와 동일한 키를 사용하는 설정 로드 어댑터
     @MainActor var preferenceValues: [String: Any] {
@@ -31,6 +32,7 @@ public struct AppPreferencesPayload: Codable, Equatable, Sendable {
             PreferencesStore.Keys.refreshIntervalMinutes: refreshIntervalMinutes,
             PreferencesStore.Keys.resetReminderMinutes: resetReminderMinutes,
             PreferencesStore.Keys.automaticResetPingEnabled: automaticResetPingEnabled ?? false,
+            PreferencesStore.Keys.automaticRefreshEnabled: automaticRefreshEnabled ?? true,
             PreferencesStore.Keys.activityNotificationDurationSeconds: activityNotificationDurationSeconds,
             PreferencesStore.Keys.showAccountLabels: showAccountLabels,
             PreferencesStore.Keys.launchAtLogin: launchAtLogin,

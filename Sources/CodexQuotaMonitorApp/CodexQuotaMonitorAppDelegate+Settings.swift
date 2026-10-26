@@ -86,6 +86,10 @@ extension CodexQuotaMonitorAppDelegate {
                         self.render(states: self.accountStore.states)
                     }
                 ),
+                automaticRefreshEnabled: Binding(
+                    get: { [weak self] in self?.preferences.automaticRefreshEnabled ?? true },
+                    set: { [weak self] value in self?.preferences.updateAutomaticRefresh(value) }
+                ),
                 resetReminderMinutes: Binding(
                     get: { [weak self] in self?.preferences.resetReminderMinutes ?? 5 },
                     set: { [weak self] minutes in

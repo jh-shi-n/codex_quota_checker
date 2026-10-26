@@ -21,6 +21,7 @@ public struct AccountDetailView: View {
     @Environment(\.accountDisplayNames) private var accountDisplayNames
     @ObservedObject private var probeStore = UsageWindowProbeStore.shared
     @ObservedObject private var accountTokenUsageStore = AccountTokenUsageStore.shared
+    @ObservedObject private var manualRequestGate = ManualRequestGate.shared
 
     public init(
         account: AccountState,
@@ -167,23 +168,25 @@ public struct AccountDetailView: View {
                     Text("마지막 조회 \(AccountDashboardFormatting.dateText(displayedAccount.lastUpdated, dateStyle: .none, timeStyle: .medium))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(Self.statusText(for: account.status))
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(statusColor)
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(manualRequestGate.message(for: account) ?? Self.statusText(for: account))
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(manualRequestGate.message(for: account) == nil ? statusColor : .orange)
+                    }
                 }
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityElement(children: .combine)
 
                 Button(action: onRefresh) {
-                    if account.status == .loading || accountTokenUsageStore.isLoading(for: account) {
+                    if account.isRefreshing || accountTokenUsageStore.isLoading(for: account) {
                         ProgressView().controlSize(.small)
                     } else {
                         Label("새로고침", systemImage: "arrow.clockwise")
                     }
                 }
                 .buttonStyle(.appAction)
-                .disabled(account.status == .notConfigured || account.status == .loading || accountTokenUsageStore.isLoading(for: account))
+                .disabled(account.status == .notConfigured || account.isRefreshing || account.isResetVerificationPending || accountTokenUsageStore.isLoading(for: account))
                 .keyboardShortcut("r", modifiers: [.command])
                 .help("이 계정의 할당량과 토큰 사용량 새로고침")
                 .accessibilityLabel("계정 새로고침")
@@ -235,7 +238,7 @@ public struct AccountDetailView: View {
                 for: account.overallRemainingPercent ?? account.fiveHourRemainingPercent ?? 0
             )
         case .loading:
-            return .accentColor
+            return account.isWaitingForRefresh ? .secondary : .accentColor
         case .loginRequired, .codexNotFound, .timeout, .error:
             return QuotaColors.critical.swiftUIColor
         }
@@ -264,10 +267,16 @@ public struct AccountDetailView: View {
 
     /// 화면 수명과 독립적으로 선택 계정의 초기화 갱신 시작
     private func runProbe() {
+        guard manualRequestGate.allow(account) else { return }
         probeStore.start(for: account, runner: runUsageWindowProbe)
     }
 
     /// 계정 조회 상태의 상세 화면 표시명 변환
+    public static func statusText(for account: AccountState) -> String {
+        account.status == .loading && account.isWaitingForRefresh ? "조회 대기" : statusText(for: account.status)
+    }
+
+    /// 실제 요청·정상·실패 상태의 표시명 변환
     public static func statusText(for status: AccountStatus) -> String {
         switch status {
         case .notConfigured:
