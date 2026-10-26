@@ -134,6 +134,10 @@ public final class PreferencesStore: ObservableObject {
     @Published public private(set) var cacheError: String?
     private var cacheMigrationError: String?
     private let quotaStore: SQLiteQuotaSnapshotStore?
+    private var cacheTaskID = 0
+    private var cacheTask: Task<Void, Never>?
+    private var modifiedCachePaths = Set<String>()
+    public var onQuotaSnapshotsRestored: (@MainActor () -> Void)?
     private var quotaSnapshotsStorage: [String: QuotaSnapshot]
 
     /// 목적: 설정값 로드, 기본값 병합, 비정규 저장값 정리
@@ -258,30 +262,40 @@ public final class PreferencesStore: ObservableObject {
         )
         let rawQuotaSnapshots = userDefaults.data(forKey: Keys.lastSuccessfulQuotaSnapshots)
         self.quotaSnapshotsStorage = Self.decodedQuotaSnapshots(rawQuotaSnapshots, homeDirectory: self.homeDirectory)
-        if let quotaStore, !settingsLoadFailed {
-            do {
-                if let rawQuotaSnapshots {
-                    let decoded = try JSONDecoder().decode([String: QuotaSnapshot].self, from: rawQuotaSnapshots)
-                    let canonical = Dictionary(decoded.map { (Self.normalizedAccountPath($0.key, homeDirectory: self.homeDirectory), $0.value) }, uniquingKeysWith: { _, last in last })
-                    let existing = try quotaStore.load()
-                    let missing = canonical.filter { existing[$0.key] == nil && !$0.key.isEmpty }
-                    try quotaStore.save(missing)
-                    let restored = try quotaStore.load()
-                    guard missing.allSatisfy({ restored[$0.key] == $0.value || ($0.value.lastUpdated ?? Date()).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) <= Date() }) else {
-                        throw CocoaError(.fileReadCorruptFile)
-                    }
-                    if bundle != nil { userDefaults.removeObject(forKey: Keys.lastSuccessfulQuotaSnapshots) }
-                }
-                self.quotaSnapshotsStorage = try quotaStore.load()
-            } catch {
-                self.cacheMigrationError = "할당량 캐시를 복원하지 못했습니다: \(error.localizedDescription)"
-                self.cacheError = self.cacheMigrationError
-            }
-        }
 
         isFirstLaunch = !configurationFileWasPresentAtLaunch && !hasRegisteredAccount && !hasRegisteredAccounts
         // 설정 인코딩 후 등록 이력 파일을 먼저 반영하고 UserDefaults 갱신
         if loadError == nil { persist() }
+        if let quotaStore, !settingsLoadFailed {
+            let legacy = quotaSnapshotsStorage
+            let previous = cacheTask
+            cacheTask = Task { [weak self] in
+                await previous?.value
+                do {
+                    let restored = try await DatabaseWorkQueue.perform {
+                        if let rawQuotaSnapshots { _ = try JSONDecoder().decode([String: QuotaSnapshot].self, from: rawQuotaSnapshots) }
+                        let existing = try quotaStore.load()
+                        let missing = legacy.filter { existing[$0.key] == nil && !$0.key.isEmpty }
+                        if !missing.isEmpty { try quotaStore.save(missing) }
+                        let loaded = try quotaStore.load()
+                        guard missing.allSatisfy({ loaded[$0.key] == $0.value || ($0.value.lastUpdated ?? Date()).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) <= Date() }) else {
+                            throw CocoaError(.fileReadCorruptFile)
+                        }
+                        return loaded
+                    }
+                    guard let self else { return }
+                    for (path, snapshot) in restored where !self.modifiedCachePaths.contains(path) {
+                        self.quotaSnapshotsStorage[path] = snapshot
+                    }
+                    if rawQuotaSnapshots != nil && bundle != nil { self.userDefaults.removeObject(forKey: Keys.lastSuccessfulQuotaSnapshots) }
+                    self.cleanupQuotaSnapshots()
+                    self.onQuotaSnapshotsRestored?()
+                } catch {
+                    self?.cacheMigrationError = "할당량 캐시를 복원하지 못했습니다: \(error.localizedDescription)"
+                    self?.cacheError = self?.cacheMigrationError
+                }
+            }
+        }
     }
 
     /// 계정 표시 활성화 여부와 독립적인 등록 경로 존재 여부
@@ -311,7 +325,6 @@ public final class PreferencesStore: ObservableObject {
     public func quotaSnapshot(for accountPath: String) -> QuotaSnapshot? {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return nil }
-        cleanupQuotaSnapshots()
         return quotaSnapshotsStorage[normalizedPath]
     }
 
@@ -326,10 +339,11 @@ public final class PreferencesStore: ObservableObject {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return }
         quotaSnapshotsStorage[normalizedPath] = snapshot
-        do {
-            try quotaStore?.save([normalizedPath: snapshot])
-            cleanupQuotaSnapshots()
-        } catch { cacheError = "할당량 캐시를 저장하지 못했습니다: \(error.localizedDescription)" }
+        modifiedCachePaths.insert(normalizedPath)
+        if let quotaStore {
+            enqueueCacheWrite { try quotaStore.save([normalizedPath: snapshot]) }
+        }
+        cleanupQuotaSnapshots()
     }
 
     public func updateQuotaSnapshot(for accountPath: URL, snapshot: QuotaSnapshot) {
@@ -340,10 +354,8 @@ public final class PreferencesStore: ObservableObject {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return }
         quotaSnapshotsStorage.removeValue(forKey: normalizedPath)
-        do {
-            try quotaStore?.remove(path: normalizedPath)
-            cacheError = cacheMigrationError
-        } catch { cacheError = "할당량 캐시를 삭제하지 못했습니다: \(error.localizedDescription)" }
+        modifiedCachePaths.insert(normalizedPath)
+        if let quotaStore { enqueueCacheWrite { try quotaStore.remove(path: normalizedPath) } }
     }
 
     public func removeQuotaSnapshot(for accountPath: URL) {
@@ -354,14 +366,32 @@ public final class PreferencesStore: ObservableObject {
     public func cleanupQuotaSnapshots(now: Date = Date()) {
         guard !settingsLoadFailed, let quotaStore else { return }
         let paths = Set(accountPaths.filter { !$0.isEmpty })
-        do {
-            try quotaStore.cleanup(registeredPaths: paths, now: now)
-            quotaSnapshotsStorage = try quotaStore.load(now: now)
-            quotaSnapshotsStorage = quotaSnapshotsStorage.filter {
-                paths.contains($0.key) && ($0.value.lastUpdated ?? now).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) > now
-            }
-            cacheError = cacheMigrationError
-        } catch { cacheError = "할당량 캐시 정리에 실패했습니다. 다음 주기에 재시도합니다: \(error.localizedDescription)" }
+        quotaSnapshotsStorage = quotaSnapshotsStorage.filter {
+            paths.contains($0.key) && ($0.value.lastUpdated ?? now).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) > now
+        }
+        enqueueCacheWrite { try quotaStore.cleanup(registeredPaths: paths, now: now) }
+    }
+
+    /// 순서가 필요한 캐시 쓰기의 직렬 실행과 오류 전달
+    private func enqueueCacheWrite(_ operation: @escaping @Sendable () throws -> Void) {
+        let previous = cacheTask
+        cacheTaskID += 1
+        cacheTask = Task { [weak self] in
+            await previous?.value
+            do {
+                try await DatabaseWorkQueue.perform(operation)
+                self?.cacheError = self?.cacheMigrationError
+            } catch { self?.cacheError = "할당량 캐시 저장·정리에 실패했습니다: \(error.localizedDescription)" }
+        }
+    }
+
+    /// 시작 복원·직렬 저장 완료의 테스트 및 종료 대기 경계
+    public func waitForCacheIO() async {
+        while let task = cacheTask {
+            let id = cacheTaskID
+            await task.value
+            if id == cacheTaskID { return }
+        }
     }
 
     /// Returns the normalized representation used as a snapshot key.

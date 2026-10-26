@@ -42,11 +42,19 @@ extension CodexQuotaMonitorAppDelegate {
         quotaMonitoring.stop()
         UsageWindowProbeStore.shared.cancelAll()
         AccountTokenUsageStore.shared.invalidateAll()
+        let reply = AppTerminationReplyGate(sender)
         Task {
             await accountStore.shutdown(timeout: 2)
             await ProcessGroupTermination.shutdown()
             await sessionActivityMonitor.stop()
-            sender.reply(toApplicationShouldTerminate: true)
+            await preferences.waitForCacheIO()
+            await AccountTokenUsageStore.shared.waitForPersistence()
+            reply.finish()
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            await ProcessGroupTermination.shutdown()
+            reply.finish()
         }
         return .terminateLater
     }
@@ -109,5 +117,22 @@ extension CodexQuotaMonitorAppDelegate {
                 }
             }
         }
+    }
+}
+
+/// 정상 정리와 종료 제한시간 경쟁에서 AppKit 종료 응답의 단일 전달
+@MainActor
+private final class AppTerminationReplyGate {
+    private let application: NSApplication
+    private var finished = false
+
+    /// 종료 요청 대상 앱 보관
+    init(_ application: NSApplication) { self.application = application }
+
+    /// 먼저 완료된 종료 경로에서만 응답 전달
+    func finish() {
+        guard !finished else { return }
+        finished = true
+        application.reply(toApplicationShouldTerminate: true)
     }
 }

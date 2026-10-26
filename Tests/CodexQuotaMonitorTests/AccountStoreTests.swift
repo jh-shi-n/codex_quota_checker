@@ -518,7 +518,9 @@ final class AccountStoreTests: XCTestCase {
         }
         await firstStore.refresh(accountID: "C1")
 
+        await preferences.waitForCacheIO()
         let reloadedPreferences = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
+        await reloadedPreferences.waitForCacheIO()
         let restartedStore = AccountStore(
             configs: configs,
             preferencesStore: reloadedPreferences

@@ -28,6 +28,8 @@ public final class AccountTokenUsageStore: ObservableObject {
     @Published private var failures: Set<Key> = []
     @Published private var operations: [Key: Operation] = [:]
     private var attemptedAt: [Key: Date] = [:]
+    private var persistenceTask: Task<Void, Never>?
+    private var persistenceGeneration = 0
     private let persistence: SQLiteAccountTokenUsageStore?
     private var homes: [String: String] = [:]
     private var loadedHomes: Set<String> = []
@@ -45,31 +47,61 @@ public final class AccountTokenUsageStore: ObservableObject {
         for id in homes.keys where homes[id] != nextHomes[id] { invalidate(accountID: id) }
         let changed = homes != nextHomes
         homes = nextHomes
-        do {
-            var accessedDisk = changed
-            var readFailed = false
-            if changed { try persistence?.cleanup(homes: Set(homes.values), now: now) }
-            for account in accounts where account.status != .notConfigured {
-                guard let home = homes[account.id] else { continue }
-                if !loadedHomes.contains(home) {
-                    accessedDisk = true
-                    do {
-                        persistedSnapshots[home] = try persistence?.load(home: home, now: now)
-                        loadedHomes.insert(home)
-                    } catch {
-                        readFailed = true
-                        persistenceError = "마지막 토큰 사용량을 복원하지 못했습니다."
-                        continue
+        if changed { persistenceGeneration += 1 }
+        let generation = persistenceGeneration
+        let missing = Set(accounts.filter { $0.status != .notConfigured }.compactMap { homes[$0.id] }).subtracting(loadedHomes)
+        for account in accounts {
+            guard let home = homes[account.id], snapshots[Key(account)] == nil,
+                  let snapshot = persistedSnapshots[home],
+                  snapshot.fetchedAt.addingTimeInterval(SQLiteAccountTokenUsageStore.lifetime) > now,
+                  account.email == nil || account.email == snapshot.accountEmail else { continue }
+            snapshots[Key(account)] = snapshot
+        }
+        guard let persistence, changed || !missing.isEmpty else { return }
+        loadedHomes.formUnion(missing)
+        let allHomes = Set(homes.values)
+        let previous = persistenceTask
+        persistenceTask = Task { [weak self] in
+            await previous?.value
+            do {
+                let restored = try await DatabaseWorkQueue.perform {
+                    if changed { try persistence.cleanup(homes: allHomes, now: now) }
+                    var restored: [String: AccountTokenUsage] = [:]
+                    var failed = Set<String>()
+                    for home in missing {
+                        do { restored[home] = try persistence.load(home: home, now: now) }
+                        catch { failed.insert(home) }
                     }
+                    return (restored, failed)
                 }
-                guard snapshots[Key(account)] == nil, let snapshot = persistedSnapshots[home],
-                      snapshot.fetchedAt.addingTimeInterval(SQLiteAccountTokenUsageStore.lifetime) > now,
-                      account.email == nil || account.email == snapshot.accountEmail else { continue }
-                snapshots[Key(account)] = snapshot
+                guard let self, self.persistenceGeneration == generation else { return }
+                for (home, value) in restored.0 where self.persistedSnapshots[home] == nil { self.persistedSnapshots[home] = value }
+                for account in accounts {
+                    guard let home = self.homes[account.id], self.snapshots[Key(account)] == nil,
+                          let snapshot = self.persistedSnapshots[home],
+                          account.email == nil || account.email == snapshot.accountEmail else { continue }
+                    self.snapshots[Key(account)] = snapshot
+                }
+                self.loadedHomes.subtract(restored.1)
+                self.persistenceError = restored.1.isEmpty ? nil : "마지막 토큰 사용량을 복원하지 못했습니다."
+            } catch {
+                guard let self, self.persistenceGeneration == generation else { return }
+                self.loadedHomes.subtract(missing)
+                self.persistenceError = "마지막 토큰 사용량을 복원하지 못했습니다."
             }
-            if accessedDisk && !readFailed { persistenceError = nil }
-        } catch {
-            persistenceError = "마지막 토큰 사용량을 복원하지 못했습니다."
+        }
+    }
+
+    /// 진행 중 영속 캐시 작업 완료 대기
+    public func waitForPersistence() async { await persistenceTask?.value }
+
+    /// 순서가 필요한 쓰기·삭제를 UI 밖에서 실행
+    private func enqueuePersistence(_ operation: @escaping @Sendable () throws -> Void) {
+        let previous = persistenceTask
+        persistenceTask = Task { [weak self] in
+            await previous?.value
+            do { try await DatabaseWorkQueue.perform(operation); self?.persistenceError = nil }
+            catch { self?.persistenceError = "토큰 사용량 캐시를 저장·정리하지 못했습니다." }
         }
     }
 
@@ -97,13 +129,13 @@ public final class AccountTokenUsageStore: ObservableObject {
                 failures.remove(key)
                 if let home = homes[account.id] {
                     persistedSnapshots[home] = snapshot
-                    do {
-                        try persistence?.save(snapshot, home: home)
-                        persistenceError = nil
-                    } catch { persistenceError = "토큰 사용량을 저장하지 못했습니다. 재실행 시 마지막 조회 결과가 표시되지 않을 수 있습니다." }
+                    if let persistence {
+                        enqueuePersistence { try persistence.save(snapshot, home: home) }
+                    }
                 }
             case .failure: failures.insert(key)
             }
+            await persistenceTask?.value
             operations[key] = nil
         }
         operations[key] = Operation(id: id, task: task)
@@ -122,13 +154,13 @@ public final class AccountTokenUsageStore: ObservableObject {
         if let home = homes[accountID] {
             persistedSnapshots[home] = nil
             loadedHomes.remove(home)
-            do { try persistence?.remove(home: home) }
-            catch { persistenceError = "변경된 계정의 토큰 사용량 캐시를 정리하지 못했습니다." }
+            if let persistence { enqueuePersistence { try persistence.remove(home: home) } }
         }
     }
 
     /// 종료 시 이전 요청·메모리만 정리하고 디스크의 정상 조회 결과 보존
     public func invalidateAll() {
+        persistenceGeneration += 1
         for operation in operations.values { operation.task.cancel() }
         operations.removeAll(); snapshots.removeAll(); failures.removeAll(); attemptedAt.removeAll()
         persistedSnapshots.removeAll(); loadedHomes.removeAll()

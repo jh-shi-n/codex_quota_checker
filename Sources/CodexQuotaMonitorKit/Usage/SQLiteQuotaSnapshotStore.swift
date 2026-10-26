@@ -3,8 +3,7 @@ import Foundation
 import SQLite3
 
 /// 토큰 DB의 별도 테이블에 보관하는 할당량 캐시
-@MainActor
-final class SQLiteQuotaSnapshotStore {
+final class SQLiteQuotaSnapshotStore: Sendable {
     private let databaseURL: URL
     static let lifetime: TimeInterval = 14 * 24 * 60 * 60
 
@@ -13,15 +12,15 @@ final class SQLiteQuotaSnapshotStore {
 
     /// 연결 수명과 스키마 보장 및 SQL 실패 전달
     private func withDatabase<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
-        try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PrivateSQLiteFiles.prepare(databaseURL)
         var pointer: OpaquePointer?
         let code = sqlite3_open_v2(databaseURL.path, &pointer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
         guard code == SQLITE_OK, let db = pointer else {
             if let pointer { sqlite3_close(pointer) }
             throw CocoaError(.fileWriteUnknown)
         }
-        defer { sqlite3_close(db) }
-        sqlite3_busy_timeout(db, 5_000)
+        defer { sqlite3_close(db); try? PrivateSQLiteFiles.secureExisting(databaseURL) }
+        sqlite3_busy_timeout(db, 250)
         try execute(db, "CREATE TABLE IF NOT EXISTS quota_snapshots (home_identity TEXT PRIMARY KEY, snapshot BLOB NOT NULL, updated_at REAL NOT NULL, expires_at REAL NOT NULL)")
         return try body(db)
     }

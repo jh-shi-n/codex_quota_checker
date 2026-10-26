@@ -85,6 +85,14 @@ public final class AccountStore: ObservableObject {
             Self.initialState(for: config, preferencesStore: resolvedPreferencesStore)
         }
         self.stateLoader = stateLoader
+        resolvedPreferencesStore.onQuotaSnapshotsRestored = { [weak self, weak resolvedPreferencesStore] in
+            guard let self, let resolvedPreferencesStore else { return }
+            self.states = self.states.map { state in
+                guard state.isWaitingForRefresh, !state.isRefreshing,
+                      let config = self.configs.first(where: { $0.id == state.id }) else { return state }
+                return Self.initialState(for: config, preferencesStore: resolvedPreferencesStore)
+            }
+        }
     }
 
     /// Compatibility alias for hosts that call the published snapshots
