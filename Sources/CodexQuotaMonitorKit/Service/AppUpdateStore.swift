@@ -139,7 +139,7 @@ public final class AppUpdateStore: ObservableObject {
                     throw error
                 }
                 guard !Task.isCancelled, self.installationID == id else { return }
-                NSApplication.shared.terminate(nil)
+                AppTerminationRequest.schedule { [weak self] in self?.installationID == id }
             } catch {
                 guard !Task.isCancelled, self.installationID == id else { return }
                 let failure = AppOperationFailure.update(error)
