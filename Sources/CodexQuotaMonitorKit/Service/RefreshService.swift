@@ -48,11 +48,11 @@ actor RefreshLoopGate {
         return true
     }
 
-    func run(generation: Int, intervalSeconds: TimeInterval) async -> Bool {
+    func run(generation: Int, intervalSeconds: TimeInterval, skipImmediate: Bool = false) async -> Bool {
         guard activate(generation: generation), activeGeneration == generation else {
             return false
         }
-        await performScheduledRefresh(generation: generation)
+        if !skipImmediate { await performScheduledRefresh(generation: generation) }
 
         while !Task.isCancelled {
             await sleep(intervalSeconds)
@@ -145,7 +145,7 @@ public final class RefreshService {
     }
 
     /// Starts a fresh loop and performs one immediate refresh.
-    public func start() {
+    public func start(skipImmediate: Bool = false) {
         stop()
         generation += 1
         let currentGeneration = generation
@@ -154,7 +154,7 @@ public final class RefreshService {
         isRunning = true
         loopTask = Task { [gate] in
             guard await gate.activate(generation: currentGeneration) else { return }
-            _ = await gate.run(generation: currentGeneration, intervalSeconds: intervalSeconds)
+            _ = await gate.run(generation: currentGeneration, intervalSeconds: intervalSeconds, skipImmediate: skipImmediate)
         }
     }
 
@@ -178,6 +178,11 @@ public final class RefreshService {
             self.intervalMinutes = Self.normalizedIntervalMinutes(intervalMinutes)
         }
         start()
+    }
+
+    /// 주기 조회 OFF 상태에서도 다음 시작에 적용할 간격 변경
+    public func updateInterval(minutes: Int) {
+        intervalMinutes = Self.normalizedIntervalMinutes(minutes)
     }
 
     /// Performs an immediate manual refresh. A request arriving during an

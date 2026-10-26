@@ -8,6 +8,32 @@ import XCTest
 /// 실제 대기·전송 없이 관측 추적기를 사용하는 후속 조회 검증
 @MainActor
 final class ResetTimeConfirmationTests: XCTestCase {
+    /// 재시작 캐시에 로그인 정보가 처음 채워지는 경우의 후속 확인 검증
+    func testCachedIdentityResolutionContinuesConfirmation() async {
+        let h = ConfirmationHarness()
+        h.account.email = nil
+        h.account.planType = nil
+        h.account.status = .loading
+        h.resolveIdentityOnRead = true
+        let result = await h.service.confirm(h.account)
+        XCTAssertTrue(result.isCurrentAccount)
+        XCTAssertTrue(result.isStable())
+        XCTAssertEqual(result.queryCount, 2)
+    }
+
+    /// 최초 보완 이후 실제 로그인 변경의 추가 조회 차단 검증
+    func testResolvedIdentityIsPinnedForLaterQueries() async {
+        let h = ConfirmationHarness()
+        h.account.email = nil
+        h.account.planType = nil
+        h.account.status = .loading
+        h.resolveIdentityOnRead = true
+        h.onSleep = { h.account.email = "changed@example.invalid" }
+        let result = await h.service.confirm(h.account)
+        XCTAssertFalse(result.isCurrentAccount)
+        XCTAssertEqual(result.queryCount, 1)
+    }
+
     /// 첫 응답을 확정하지 않고 10초 후 두 번째 응답으로 고정 확인
     func testFixedTimesRequireTwoSpacedQueries() async {
         let h = ConfirmationHarness()
@@ -102,6 +128,7 @@ private final class ConfirmationHarness {
     var primary = ResetTimeTracker()
     var secondary = ResetTimeTracker()
     var movingPrimary = false
+    var resolveIdentityOnRead = false
     var duplicateResponses = false
     var failedQueries: Set<Int> = []
     var cancelSleep = false
@@ -132,6 +159,10 @@ private final class ConfirmationHarness {
     /// 각 조회의 고정·이동·실패·중복 응답과 관측 구간 생성
     private func read() -> AccountState {
         queries += 1
+        if resolveIdentityOnRead {
+            account.email = "fixture@example.invalid"
+            account.planType = "plus"
+        }
         if duplicateResponses && queries > 1 { return account }
         if failedQueries.contains(queries) {
             account.status = .error

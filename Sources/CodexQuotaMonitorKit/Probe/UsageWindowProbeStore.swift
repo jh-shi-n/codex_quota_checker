@@ -33,6 +33,7 @@ public final class UsageWindowProbeStore: ObservableObject {
     /// 취소 후 재시작된 동일 계정 작업의 완료 처리 격리
     private struct Operation {
         let id: UUID
+        let account: AccountState
         let task: Task<Void, Never>
         let startedAt: Date
         let logger: DiagnosticLogger
@@ -40,21 +41,29 @@ public final class UsageWindowProbeStore: ObservableObject {
 
     /// 현재 계정 설정에 속한 실행 상태 반환
     func isRunning(for account: AccountState) -> Bool {
-        tasks[Key(account)] != nil
+        operationKey(for: account) != nil
+    }
+
+    /// 최초 식별 정보 보완 중에도 동일 슬롯의 진행 작업 연결 유지
+    private func operationKey(for account: AccountState) -> Key? {
+        let key = Key(account)
+        if tasks[key] != nil { return key }
+        return tasks.first { $0.value.account.acceptsIdentity(of: account) }?.key
     }
 
     /// 전송 완료 이후 추가 한도 조회 중인 계정 상태 반환
-    func isConfirming(for account: AccountState) -> Bool { confirming.contains(Key(account)) }
+    func isConfirming(for account: AccountState) -> Bool {
+        operationKey(for: account).map { confirming.contains($0) } ?? false
+    }
 
     /// 현재 수동 실행의 전송 완료·시각 확인 단계 반영
     public func markConfirming(for account: AccountState) {
-        let key = Key(account)
-        if tasks[key] != nil { confirming.insert(key) }
+        if let key = operationKey(for: account) { confirming.insert(key) }
     }
 
     /// 팝오버 재진입에도 유지되는 현재 요청의 시작 시각 조회
     func startedAt(for account: AccountState) -> Date? {
-        tasks[Key(account)]?.startedAt
+        operationKey(for: account).flatMap { tasks[$0]?.startedAt }
     }
 
     /// 버튼 실행 시각의 메모리 조회; 완료·팝오버 닫기 이후에도 유지
@@ -76,9 +85,10 @@ public final class UsageWindowProbeStore: ObservableObject {
         var initialFields = DiagnosticLogContext.resetFields(before: account)
         initialFields[.generation] = .integer(key.generation)
         logger.record(.probeRequested, operationID: operationID, accountID: account.id, fields: initialFields)
-        guard AccountDashboardActionState.canRunProbe(account: account, isRunning: tasks[key] != nil) else {
+        let alreadyRunning = isRunning(for: account)
+        guard AccountDashboardActionState.canRunProbe(account: account, isRunning: alreadyRunning) else {
             logger.record(.probeRejected, operationID: operationID, accountID: account.id,
-                          fields: [.reason: .identifier(tasks[key] != nil ? "already_running" : "not_configured")])
+                          fields: [.reason: .identifier(alreadyRunning ? "already_running" : "not_configured")])
             return nil
         }
         let startedAt = Date()
@@ -100,7 +110,14 @@ public final class UsageWindowProbeStore: ObservableObject {
                 return
             }
             if presentation.result.accountID == account.id, presentation.isCurrentAccount {
-                results[key] = presentation
+                let resultKey: Key
+                if let refreshed = presentation.refreshedAccount, account.acceptsIdentity(of: refreshed) {
+                    resultKey = Key(refreshed)
+                } else {
+                    resultKey = key
+                }
+                results[resultKey] = presentation
+                lastStartedAtByAccount[resultKey] = startedAt
                 var fields: [DiagnosticField: DiagnosticValue] = [
                     .generation: .integer(key.generation),
                     .status: .identifier(presentation.result.status.rawValue),
@@ -127,7 +144,7 @@ public final class UsageWindowProbeStore: ObservableObject {
                               fields: [.reason: .identifier("account_changed")])
             }
         }
-        tasks[key] = Operation(id: operationID, task: task, startedAt: startedAt, logger: logger)
+        tasks[key] = Operation(id: operationID, account: account, task: task, startedAt: startedAt, logger: logger)
         return task
     }
 

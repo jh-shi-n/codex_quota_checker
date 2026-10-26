@@ -89,6 +89,72 @@ public final class AccountStore: ObservableObject {
     /// account states.
     public var accountStates: [AccountState] { states }
 
+    /// 큰 일정 변경 직후 이전 고정 근거 제거 및 재확인 상태 저장
+    public func beginResetVerification(expected: AccountState) {
+        guard let index = verificationIndex(expected) else { return }
+        var state = states[index]
+        state.isResetVerificationPending = true
+        state.primaryResetObservation = .checking
+        state.secondaryResetObservation = .checking
+        state.primaryResetEvidence = nil
+        state.secondaryResetEvidence = nil
+        states[index] = state
+        saveVerifiedSnapshot(state)
+    }
+
+    /// 취소·실패 후 진행 중 안내 해제; 이전 고정 근거의 부활 제외
+    public func endResetVerification(expected: AccountState) {
+        guard let index = verificationIndex(expected) else { return }
+        states[index].isResetVerificationPending = false
+    }
+
+    /// 최대 3초 오차 유지 및 조회 경과에 비례한 이동의 고정 오인 차단
+    public func finishResetVerification(expected: AccountState, comparedTo previous: AccountState) {
+        guard let index = verificationIndex(expected), previous.acceptsIdentity(of: expected),
+              let updated = expected.lastUpdated,
+              previous.lastUpdated.map({ updated > $0 }) == true else { return }
+        var state = states[index]
+        let now = observationNow()
+        for primary in [true, false] {
+            let reset = primary ? state.primaryResetAt : state.secondaryResetAt
+            let old = primary ? previous.primaryResetAt : previous.secondaryResetAt
+            let priorEvidence = primary ? previous.primaryResetEvidence : previous.secondaryResetEvidence
+            let valid = reset.map { $0.timeIntervalSince1970.isFinite && $0 > now } == true
+            let delta = reset.flatMap { value in old.map { value.timeIntervalSince($0) } }
+            let elapsed = updated.timeIntervalSince(previous.lastUpdated!)
+            let followsClock = delta.map { $0 > 0 && abs($0 - elapsed) <= 1 } ?? false
+            let trusted = priorEvidence?.matches(reset, now: now) == true
+            let stable = valid && delta.map({ abs($0) <= ResetTimeTracker.resetTolerance }) == true
+                && (trusted || !followsClock)
+            let observation: ResetTimeObservation = stable ? .stableObserved : (valid && old != nil ? .movingObserved : .checking)
+            let evidence = stable ? ResetTimeEvidence(resetAt: reset!, observedAt: updated) : nil
+            if primary { state.primaryResetObservation = observation; state.primaryResetEvidence = evidence }
+            else { state.secondaryResetObservation = observation; state.secondaryResetEvidence = evidence }
+        }
+        state.isResetVerificationPending = false
+        states[index] = state
+        recordObservation(state, previous: previous)
+        saveVerifiedSnapshot(state)
+    }
+
+    /// 대기 중 새 요청·계정 변경으로 교체된 스냅샷의 덮어쓰기 차단
+    private func verificationIndex(_ expected: AccountState) -> Int? {
+        states.firstIndex { $0.status == .normal && $0.id == expected.id && $0.acceptsIdentity(of: expected)
+            && $0.lastUpdated == expected.lastUpdated && $0.primaryResetAt == expected.primaryResetAt
+            && $0.secondaryResetAt == expected.secondaryResetAt }
+    }
+
+    /// 검증 결과와 계정 식별 정보를 같은 경로 캐시에 저장
+    private func saveVerifiedSnapshot(_ state: AccountState) {
+        guard let config = configs.first(where: { $0.id == state.id }), state.status == .normal else { return }
+        preferencesStore.updateQuotaSnapshot(for: config.home, snapshot: .init(
+            usedPercent: state.primaryUsedPercent, remainingPercent: state.primaryRemainingPercent,
+            resetAt: state.primaryResetAt, secondaryUsedPercent: state.secondaryUsedPercent,
+            secondaryRemainingPercent: state.secondaryRemainingPercent, secondaryResetAt: state.secondaryResetAt,
+            resetCredits: state.resetCredits, lastUpdated: state.lastUpdated, email: state.email, planType: state.planType,
+            primaryResetEvidence: state.primaryResetEvidence, secondaryResetEvidence: state.secondaryResetEvidence))
+    }
+
     /// Stable left-side C1/C2 snapshots for the notch layout.
     public var leftStates: [AccountState] {
         Self.split(states, side: .left)
@@ -470,6 +536,18 @@ public final class AccountStore: ObservableObject {
                     resetAt: state.secondaryResetAt, observedAt: updated,
                     uptime: uptime, maximumGap: maximumGap
                 )
+                let previous = states[index]
+                let retainEvidence = !clockChanged && previous.acceptsIdentity(of: state)
+                state.primaryResetEvidence = Self.resetEvidence(
+                    resetAt: state.primaryResetAt, observation: &state.primaryResetObservation,
+                    previous: retainEvidence && !changes.contains(where: { $0.window == .primary }) ? previous.primaryResetEvidence : nil,
+                    observedAt: updated, now: now
+                )
+                state.secondaryResetEvidence = Self.resetEvidence(
+                    resetAt: state.secondaryResetAt, observation: &state.secondaryResetObservation,
+                    previous: retainEvidence && !changes.contains(where: { $0.window == .secondary }) ? previous.secondaryResetEvidence : nil,
+                    observedAt: updated, now: now
+                )
                 state.primaryResetSegmentID = state.primaryResetAt.map { $0.timeIntervalSince1970.isFinite && $0 > now } == true ? current.primary.segmentID : nil
                 state.secondaryResetSegmentID = state.secondaryResetAt.map { $0.timeIntervalSince1970.isFinite && $0 > now } == true ? current.secondary.segmentID : nil
                 state.resetChanges = changes
@@ -492,6 +570,8 @@ public final class AccountStore: ObservableObject {
                 state.secondaryResetObservation = states[index].secondaryResetObservation
                 state.primaryResetSegmentID = states[index].primaryResetSegmentID
                 state.secondaryResetSegmentID = states[index].secondaryResetSegmentID
+                state.primaryResetEvidence = states[index].primaryResetEvidence
+                state.secondaryResetEvidence = states[index].secondaryResetEvidence
             } else {
                 resetHistories[state.id] = nil
                 resetBaselines[state.id] = nil
@@ -511,12 +591,30 @@ public final class AccountStore: ObservableObject {
                 secondaryRemainingPercent: result.state.secondaryRemainingPercent,
                 secondaryResetAt: result.state.secondaryResetAt,
                 resetCredits: result.state.resetCredits,
-                lastUpdated: result.state.lastUpdated
+                lastUpdated: result.state.lastUpdated,
+                email: state.email, planType: state.planType,
+                primaryResetEvidence: state.primaryResetEvidence,
+                secondaryResetEvidence: state.secondaryResetEvidence
             )
         )
         if !earlyWindows.isEmpty {
             onEarlyQuotaReset?(EarlyQuotaReset(accountID: state.id, windows: earlyWindows))
         }
+    }
+
+    /// 같은 계정·미래 시각의 이전 근거 유지 및 새 고정 관측 보관
+    private static func resetEvidence(
+        resetAt: Date?, observation: inout ResetTimeObservation,
+        previous: ResetTimeEvidence?, observedAt: Date, now: Date
+    ) -> ResetTimeEvidence? {
+        if observation == .stableObserved, let resetAt {
+            return ResetTimeEvidence(resetAt: resetAt, observedAt: observedAt)
+        }
+        if observation == .checking, let previous, previous.matches(resetAt, now: now) {
+            observation = .stableObserved
+            return previous
+        }
+        return nil
     }
 
     /// 민감 정보 없이 한도별 관측 구간·상태·간격·전후 시각 기록
@@ -557,10 +655,14 @@ public final class AccountStore: ObservableObject {
             return AccountState.notConfigured(id: config.id)
         }
         guard let snapshot = preferencesStore.quotaSnapshot(for: config.home) else {
-            return AccountState.loading(id: config.id)
+            var state = AccountState.loading(id: config.id)
+            state.isWaitingForRefresh = true
+            return state
         }
-        return AccountState(
+        var state = AccountState(
             id: config.id,
+            email: snapshot.email,
+            planType: snapshot.planType,
             primaryUsedPercent: snapshot.primaryUsedPercent,
             secondaryUsedPercent: snapshot.secondaryUsedPercent,
             primaryRemainingPercent: snapshot.primaryRemainingPercent,
@@ -571,6 +673,16 @@ public final class AccountStore: ObservableObject {
             lastUpdated: snapshot.lastUpdated,
             status: .loading
         )
+        state.isWaitingForRefresh = true
+        if let evidence = snapshot.primaryResetEvidence, evidence.matches(state.primaryResetAt) {
+            state.primaryResetEvidence = evidence
+            state.primaryResetObservation = .stableObserved
+        }
+        if let evidence = snapshot.secondaryResetEvidence, evidence.matches(state.secondaryResetAt) {
+            state.secondaryResetEvidence = evidence
+            state.secondaryResetObservation = .stableObserved
+        }
+        return state
     }
 
     /// 직전 경로 세대를 유지한 로딩 상태 구성 및 이전 오류 해제
@@ -583,6 +695,7 @@ public final class AccountStore: ObservableObject {
         guard let previous else { return AccountState.loading(id: config.id) }
         var state = previous
         state.status = .loading
+        state.isWaitingForRefresh = false
         state.errorMessage = nil
         return state
     }

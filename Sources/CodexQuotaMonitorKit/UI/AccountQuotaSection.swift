@@ -45,7 +45,7 @@ public struct AccountQuotaSection: View {
         }
     }
 
-    /// 한도 잔여량과 초기화 시각 표시; 조회 상태는 헤더에서 통합 제공
+    /// 고정 관측된 미래 시각만 날짜·카운트다운 표시
     @ViewBuilder
     private func quotaCard(
         title: String,
@@ -55,6 +55,9 @@ public struct AccountQuotaSection: View {
         observation: ResetTimeObservation,
         now: Date
     ) -> some View {
+        let displayedReset = AccountDashboardFormatting.observedResetDate(
+            resetAt, observation: observation, status: account.status, now: now
+        )
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
@@ -69,7 +72,7 @@ public struct AccountQuotaSection: View {
                         Text("남은 시간")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        Text(AccountDashboardFormatting.remainingTimeText(until: resetAt, now: now))
+                        Text(AccountDashboardFormatting.remainingTimeText(until: displayedReset, now: now))
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
                     }
@@ -78,14 +81,16 @@ public struct AccountQuotaSection: View {
                         Text("초기화")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        Text(AccountDashboardFormatting.dateText(resetAt))
+                        Text(AccountDashboardFormatting.dateText(displayedReset))
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Text(observation == .stableObserved ? "고정 관측" : (observation == .movingObserved ? "초기화 시각 변동 중" : "초기화 시각 확인 중"))
+            Text(account.isResetVerificationPending ? "초기화 시각 재확인 중" : AccountDashboardFormatting.resetScheduleStatusText(
+                resetAt, observation: observation, status: account.status, now: now
+            ))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

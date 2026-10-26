@@ -10,10 +10,31 @@ public enum ResetTimeObservation: String, Equatable, Sendable {
     case movingObserved
 }
 
+/// 동일 초기화 구간에서 재사용 가능한 고정 관측 근거
+public struct ResetTimeEvidence: Codable, Equatable, Sendable {
+    public let resetAt: Date
+    public let observedAt: Date
+
+    /// 실제 고정 관측의 시각과 조회 시점 보관
+    public init(resetAt: Date, observedAt: Date) {
+        self.resetAt = resetAt
+        self.observedAt = observedAt
+    }
+
+    /// 만료·시계 역행·일정 변경 시 기존 근거 폐기
+    public func matches(_ reset: Date?, now: Date = Date()) -> Bool {
+        guard let reset, reset.timeIntervalSince1970.isFinite,
+              resetAt.timeIntervalSince1970.isFinite, observedAt.timeIntervalSince1970.isFinite,
+              observedAt <= now.addingTimeInterval(2), observedAt < resetAt,
+              resetAt > now, reset > now else { return false }
+        return abs(reset.timeIntervalSince(resetAt)) <= ResetTimeTracker.resetTolerance
+    }
+}
+
 /// 최신 시각과 독립적인 간격·오차 기반 관측 및 구간 식별
 struct ResetTimeTracker: Sendable {
-    static let minimumInterval: TimeInterval = 10
     static let tolerance: TimeInterval = 2
+    static let resetTolerance: TimeInterval = 3
     /// 서버 초기화 시각과 벽시계·단조 시계의 관측 기준
     private struct Sample: Sendable {
         let resetAt: Date
@@ -53,13 +74,14 @@ struct ResetTimeTracker: Sendable {
                 return observation
             }
             let resetDelta = resetAt.timeIntervalSince(last.resetAt)
-            if abs(resetDelta) > Self.tolerance && abs(resetDelta - elapsed) > Self.tolerance {
+            if abs(resetDelta) > Self.resetTolerance && abs(resetDelta - elapsed) > Self.resetTolerance {
                 restart()
                 samples = [next]
                 return observation
             }
-            guard elapsed >= Self.minimumInterval else { return observation }
-            if abs(resetDelta) <= Self.tolerance {
+            // 짧은 간격의 비례 이동을 고정으로 오인하지 않는 상대 오차 적용
+            let stableTolerance = min(Self.resetTolerance, elapsed / 3)
+            if abs(resetDelta) <= stableTolerance {
                 samples = [next]
                 observation = .stableObserved
                 return observation
@@ -71,12 +93,21 @@ struct ResetTimeTracker: Sendable {
             observation = .checking
             return observation
         }
+        let movingTolerance = min(Self.resetTolerance, observedAt.timeIntervalSince(first.observedAt) / 3)
         let moving = samples.allSatisfy {
             abs($0.resetAt.timeIntervalSince(first.resetAt)
-                - $0.observedAt.timeIntervalSince(first.observedAt)) <= Self.tolerance
+                - $0.observedAt.timeIntervalSince(first.observedAt)) <= movingTolerance
         }
-        observation = moving ? .movingObserved : .checking
-        if !moving { samples = Array(samples.suffix(2)) }
+        let fixedWithJitter = !moving && samples.allSatisfy {
+            abs($0.resetAt.timeIntervalSince(first.resetAt)) <= Self.resetTolerance
+        } && abs(resetAt.timeIntervalSince(first.resetAt)) <= movingTolerance
+        if fixedWithJitter {
+            observation = .stableObserved
+            samples = [next]
+        } else {
+            observation = moving ? .movingObserved : .checking
+            if !moving { samples = Array(samples.suffix(2)) }
+        }
         return observation
     }
 }

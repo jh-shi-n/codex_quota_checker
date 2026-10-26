@@ -10,6 +10,32 @@ import XCTest
 final class ResetTimeObservationTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// 10초 대기 없이 연속 요청의 마지막 정상 시각을 기준으로 고정 판정 검증
+    func testRapidRequestsUseLatestObservation() {
+        var tracker = ResetTimeTracker()
+        for (elapsed, delta, expected) in [(0.0, 0.0, ResetTimeObservation.checking),
+                                          (1, 1, .checking), (2, 1, .stableObserved)] {
+            XCTAssertEqual(tracker.observe(resetAt: start.addingTimeInterval(18_000 + delta),
+                observedAt: start.addingTimeInterval(elapsed), uptime: elapsed), expected)
+        }
+    }
+
+    /// 빠른 조회의 비례 이동과 작은 고정 시각 잡음 혼동 방지 검증
+    func testRapidMovementAndFixedJitterAreDistinct() {
+        var moving = ResetTimeTracker()
+        var fixed = ResetTimeTracker()
+        for elapsed in [0.0, 1, 2] {
+            _ = moving.observe(resetAt: start.addingTimeInterval(18_000 + elapsed),
+                observedAt: start.addingTimeInterval(elapsed), uptime: elapsed)
+            _ = fixed.observe(resetAt: start.addingTimeInterval(18_000 + (elapsed == 1 ? 1 : 0)),
+                observedAt: start.addingTimeInterval(elapsed), uptime: elapsed)
+        }
+        XCTAssertEqual(moving.observation, .movingObserved)
+        XCTAssertEqual(fixed.observation, .stableObserved)
+        XCTAssertEqual(fixed.observe(resetAt: start.addingTimeInterval(18_000),
+            observedAt: start.addingTimeInterval(3), uptime: 3), .stableObserved)
+    }
+
     /// 60초 이내 이동 후 고정 응답이 기존 변동 판정을 해제하는지 검증
     func testMovingObservationSettlesWithinTenSeconds() {
         var tracker = ResetTimeTracker()
@@ -22,17 +48,15 @@ final class ResetTimeObservationTests: XCTestCase {
             observedAt: start.addingTimeInterval(30), uptime: 30), .stableObserved)
     }
 
-    /// 최소 간격·허용 오차 경계와 큰 변경의 구간 재설정 검증
-    func testMinimumIntervalAndToleranceBoundaries() {
-        for delta in [2.0, 2.001] {
+    /// 허용 오차 경계와 큰 변경의 구간 재설정 검증
+    func testToleranceBoundaries() {
+        for delta in [3.0, 3.001] {
             var tracker = ResetTimeTracker()
             let segment = tracker.segmentID
             XCTAssertEqual(tracker.observe(resetAt: start.addingTimeInterval(18_000), observedAt: start, uptime: 0), .checking)
-            XCTAssertEqual(tracker.observe(resetAt: start.addingTimeInterval(18_000),
-                observedAt: start.addingTimeInterval(9.999), uptime: 9.999), .checking)
             XCTAssertEqual(tracker.observe(resetAt: start.addingTimeInterval(18_000 + delta),
-                observedAt: start.addingTimeInterval(10), uptime: 10), delta == 2 ? .stableObserved : .checking)
-            XCTAssertEqual(tracker.segmentID == segment, delta == 2)
+                observedAt: start.addingTimeInterval(10), uptime: 10), delta == 3 ? .stableObserved : .checking)
+            XCTAssertEqual(tracker.segmentID == segment, delta == 3)
         }
     }
 
@@ -60,7 +84,7 @@ final class ResetTimeObservationTests: XCTestCase {
             XCTAssertEqual(tracker.observe(
                 resetAt: start.addingTimeInterval(18_000),
                 observedAt: start.addingTimeInterval(elapsed), uptime: elapsed
-            ), .checking)
+            ), elapsed == 0 ? .checking : .stableObserved)
         }
         tracker = ResetTimeTracker()
         for index in 0..<3 {
@@ -109,8 +133,8 @@ final class ResetTimeObservationTests: XCTestCase {
         }
     }
 
-    /// 계정별·구간별 분리, 실패 표시 보존, 재관측 및 계정·경로 변경 검증
-    func testAccountStoreSeparatesWindowsAndRestartsAfterFailureOrIdentityChange() async {
+    /// 한도별 분리·일시 실패 뒤 동일 시각 유지·계정과 경로 변경 시 폐기 검증
+    func testAccountStoreRetainsEvidenceAfterFailureAndDiscardsItOnIdentityChange() async {
         let suite = "ResetTimeObservationTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -152,7 +176,7 @@ final class ResetTimeObservationTests: XCTestCase {
                                       primaryResetAt: start.addingTimeInterval(18_000),
                                       lastUpdated: clock.now, status: .normal))
         await store.refresh(accountID: "C1")
-        XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .checking)
+        XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .stableObserved)
         for elapsed in [1_200.0, 1_500] {
             clock.now = start.addingTimeInterval(elapsed)
             clock.uptime = elapsed
@@ -175,7 +199,7 @@ final class ResetTimeObservationTests: XCTestCase {
         XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .checking)
     }
 
-    /// 영속 복원 시 이전 실행의 관측 상태를 재사용하지 않는지 검증
+    /// 별도 저장 근거 없는 AccountState 직렬화의 관측 구간 재사용 차단 검증
     func testObservationIsNotPersisted() throws {
         var state = AccountState(id: "C1", primaryResetAt: start.addingTimeInterval(18_000), status: .normal)
         state.primaryResetObservation = .stableObserved

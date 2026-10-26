@@ -15,7 +15,6 @@ extension CodexQuotaMonitorAppDelegate {
         DiagnosticLogContext.recordCLIVersion()
         installWakeObserver()
         quotaResetNotifications.start()
-        quotaResetScheduler.start()
         lifecycleCoordinator.launch()
         if preferences.persistenceError != nil { openSettings() }
         else { openAccountSetupIfNeeded() }
@@ -89,7 +88,9 @@ extension CodexQuotaMonitorAppDelegate {
                 DiagnosticLogger.shared.maintain()
                 self?.preferences.cleanupQuotaSnapshots()
                 await self?.lifecycleCoordinator.wake()
-                await self?.quotaResetScheduler.tick()
+                if self?.preferences.automaticRefreshEnabled == true && self?.quotaMonitoring.isStarting == false {
+                    await self?.quotaResetScheduler.tick()
+                }
             }
         }
     }

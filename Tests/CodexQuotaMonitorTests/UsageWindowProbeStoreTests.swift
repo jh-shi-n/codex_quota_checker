@@ -7,6 +7,37 @@ import XCTest
 /// 화면 수명과 독립적인 계정별 갱신 동작 검증
 @MainActor
 final class UsageWindowProbeStoreTests: XCTestCase {
+    /// 캐시 계정의 최초 식별 정보 보완 이후 현재 계정에 결과 연결 검증
+    func testCachedProbeResultFollowsResolvedIdentity() async throws {
+        let store = UsageWindowProbeStore()
+        let cached = AccountState(id: "C2", status: .loading)
+        let resolved = AccountState(id: "C2", email: "fixture@example.invalid", planType: "plus", status: .normal)
+        let gate = ProbeStoreTestGate()
+        let task = try XCTUnwrap(store.start(for: cached) { _ in
+            await gate.wait()
+            return UsageWindowProbePresentationResult(
+                result: UsageWindowProbeResult(accountID: "C2", status: .success,
+                    startedAt: Date(), completedAt: Date()),
+                quotaRefreshSucceeded: true, refreshedAccount: resolved
+            )
+        })
+        await gate.waitUntilStarted()
+        store.markConfirming(for: resolved)
+        XCTAssertTrue(store.isRunning(for: resolved))
+        XCTAssertTrue(store.isConfirming(for: resolved))
+        XCTAssertNil(store.start(for: resolved) { _ in
+            XCTFail("최초 식별 정보 보완 중 중복 Ping 금지")
+            return AccountDashboardDefaults.unavailableProbe(accountID: "C2")
+        })
+        await gate.release()
+        await task.value
+        XCTAssertEqual(store.presentation(for: resolved)?.refreshedAccount, resolved)
+        XCTAssertEqual(store.lastStartedAt(for: resolved), store.lastStartedAt(for: cached))
+        var different = resolved
+        different.email = "changed@example.invalid"
+        XCTAssertNil(store.presentation(for: different))
+    }
+
     /// 동일 경로의 로그인·구독 변경에서 이전 실행 결과·시각 재사용 차단 검증
     func testLoginAndSubscriptionChangesDoNotInheritOldProbeResult() async {
         let store = UsageWindowProbeStore()

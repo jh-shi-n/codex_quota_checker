@@ -13,6 +13,7 @@ public final class PreferencesStore: ObservableObject {
         public static let refreshIntervalMinutes = "CodexQuotaMonitor.refreshIntervalMinutes"
         public static let resetReminderMinutes = "CodexQuotaMonitor.resetReminderMinutes"
         public static let automaticResetPingEnabled = "CodexQuotaMonitor.automaticResetPingEnabled"
+        public static let automaticRefreshEnabled = "CodexQuotaMonitor.automaticRefreshEnabled"
         public static let accountPaths = "CodexQuotaMonitor.accountPaths"
         public static let enabledAccountIDs = "CodexQuotaMonitor.enabledAccountIDs"
         public static let accountDisplayOrder = "CodexQuotaMonitor.accountDisplayOrder"
@@ -33,6 +34,10 @@ public final class PreferencesStore: ObservableObject {
         public let secondaryResetAt: Date?
         public let resetCredits: RateLimitResetCredits?
         public let lastUpdated: Date?
+        public let email: String?
+        public let planType: String?
+        public let primaryResetEvidence: ResetTimeEvidence?
+        public let secondaryResetEvidence: ResetTimeEvidence?
 
         public var primaryUsedPercent: Double? { usedPercent }
         public var primaryRemainingPercent: Double? { remainingPercent }
@@ -46,7 +51,11 @@ public final class PreferencesStore: ObservableObject {
             secondaryRemainingPercent: Double? = nil,
             secondaryResetAt: Date? = nil,
             resetCredits: RateLimitResetCredits? = nil,
-            lastUpdated: Date? = nil
+            lastUpdated: Date? = nil,
+            email: String? = nil,
+            planType: String? = nil,
+            primaryResetEvidence: ResetTimeEvidence? = nil,
+            secondaryResetEvidence: ResetTimeEvidence? = nil
         ) {
             self.usedPercent = usedPercent.map(AccountState.clampPercent)
             self.remainingPercent = remainingPercent.map(AccountState.clampPercent)
@@ -56,6 +65,10 @@ public final class PreferencesStore: ObservableObject {
             self.secondaryResetAt = secondaryResetAt
             self.resetCredits = resetCredits
             self.lastUpdated = lastUpdated
+            self.email = email
+            self.planType = planType
+            self.primaryResetEvidence = primaryResetEvidence
+            self.secondaryResetEvidence = secondaryResetEvidence
         }
     }
 
@@ -77,6 +90,8 @@ public final class PreferencesStore: ObservableObject {
     @Published public private(set) var resetReminderMinutes: Int
     /// 초기화 감지 이후 최소 Ping 자동 전송 여부; 기본 미사용
     @Published public private(set) var automaticResetPingEnabled: Bool
+    @Published public private(set) var automaticRefreshEnabled: Bool
+    public var onAutomaticRefreshChanged: (@MainActor (Bool) -> Void)?
     @Published public private(set) var accountPaths: [String]
     /// 활성 표시 계정 ID, 빈 배열 허용
     @Published public private(set) var enabledAccountIDs: [String]
@@ -169,7 +184,7 @@ public final class PreferencesStore: ObservableObject {
         self.committedBundle = bundle
         if let bundle {
             for key in [Keys.accountPaths, Keys.enabledAccountIDs, Keys.accountDisplayOrder, Keys.accountDisplayNames,
-                        Keys.refreshIntervalMinutes, Keys.resetReminderMinutes, Keys.automaticResetPingEnabled, Keys.launchAtLogin,
+                        Keys.refreshIntervalMinutes, Keys.resetReminderMinutes, Keys.automaticResetPingEnabled, Keys.automaticRefreshEnabled, Keys.launchAtLogin,
                         Keys.showAccountLabels, Keys.activityNotificationDurationSeconds] {
                 userDefaults.removeObject(forKey: key)
             }
@@ -207,6 +222,7 @@ public final class PreferencesStore: ObservableObject {
             readSetting(Keys.resetReminderMinutes) as? Int ?? 5
         )
         self.automaticResetPingEnabled = readSetting(Keys.automaticResetPingEnabled) as? Bool ?? false
+        self.automaticRefreshEnabled = readSetting(Keys.automaticRefreshEnabled) as? Bool ?? true
 
         let rawPaths = readSetting(Keys.accountPaths)
         let persistedPaths = rawPaths as? [String]
@@ -418,6 +434,15 @@ public final class PreferencesStore: ObservableObject {
         }
     }
 
+    /// 주기 조회 선택 저장 성공 후 실제 타이머 시작·중지 연결
+    public func updateAutomaticRefresh(_ enabled: Bool) {
+        guard !settingsLoadFailed else { return }
+        let previous = automaticRefreshEnabled
+        automaticRefreshEnabled = enabled
+        guard persist() else { return }
+        if previous != automaticRefreshEnabled { onAutomaticRefreshChanged?(automaticRefreshEnabled) }
+    }
+
     /// 사전 알림 선택값의 허용 범위 정규화
     nonisolated public static func normalizedResetReminderMinutes(_ minutes: Int) -> Int {
         [0, 3, 5, 10].contains(minutes) ? minutes : 5
@@ -614,7 +639,7 @@ public final class PreferencesStore: ObservableObject {
             activityNotificationDurationSeconds: activityNotificationDurationSeconds,
             showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin,
             accountDisplayNames: accountDisplayNames, tokenUsageOptions: tokenUsageOptions,
-            automaticResetPingEnabled: automaticResetPingEnabled)
+            automaticResetPingEnabled: automaticResetPingEnabled, automaticRefreshEnabled: automaticRefreshEnabled)
     }
 
     /// 인코딩 실패 시 직전 정상 설정 복원
@@ -627,6 +652,7 @@ public final class PreferencesStore: ObservableObject {
         refreshIntervalMinutes = value.refreshIntervalMinutes
         resetReminderMinutes = value.resetReminderMinutes
         automaticResetPingEnabled = value.automaticResetPingEnabled ?? false
+        automaticRefreshEnabled = value.automaticRefreshEnabled ?? true
         activityNotificationDurationSeconds = value.activityNotificationDurationSeconds
         showAccountLabels = value.showAccountLabels
         launchAtLogin = value.launchAtLogin
