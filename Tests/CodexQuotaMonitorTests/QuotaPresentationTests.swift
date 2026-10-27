@@ -148,10 +148,10 @@ final class QuotaPresentationTests: XCTestCase {
     }
 
     func testSessionActivityCopiesCoverLoadingEmptyUnavailableAndStatus() {
-        XCTAssertEqual(CLIActivitySection.loadingText, "세션 실행 기록을 불러오는 중입니다…")
-        XCTAssertEqual(CLIActivitySection.emptyText, "최근 15분간 실행 기록이 없습니다.")
+        XCTAssertEqual(CLIActivitySection.loadingText, "활성 세션을 불러오는 중입니다…")
+        XCTAssertEqual(CLIActivitySection.emptyText, "최근 15분간 활성 세션이 없습니다.")
         XCTAssertTrue(CLIActivitySection.unavailableText.contains("SES-001"))
-        XCTAssertTrue(CLIActivitySection.unavailableText.contains("세션 실행 기록을 불러올 수 없습니다."))
+        XCTAssertTrue(CLIActivitySection.unavailableText.contains("활성 세션을 불러올 수 없습니다."))
         XCTAssertEqual(CLIActivitySection.activityRefreshInterval, 5)
         XCTAssertEqual(CLIActivitySection.cardListMaxHeight, 440)
         XCTAssertEqual(SessionActivityStatus.working.displayText, "작업 중")

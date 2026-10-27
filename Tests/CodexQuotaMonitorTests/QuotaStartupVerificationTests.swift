@@ -92,7 +92,7 @@ final class QuotaStartupVerificationTests: XCTestCase {
         XCTAssertNotNil(result.state?.primaryResetEvidence)
     }
 
-    /// 저장된 고정 근거는 양방향 3초까지 유지, 초과 변경은 폐기 검증
+    /// 저장된 고정 근거는 양방향 3초까지 유지, 단발 초과 보정은 미확인 유지 검증
     func testKnownFixedTimeToleratesThreeSecondsButNotMore() async {
         for delta in [-3.001, -3.0, -2, -1, 1, 2, 3, 3.001] {
             let fixture = StartupFixture()
@@ -101,7 +101,7 @@ final class QuotaStartupVerificationTests: XCTestCase {
             fixture.cache(reset: reset, evidence: true)
             let result = await fixture.run(resets: [reset.addingTimeInterval(delta)], startup: true)
             XCTAssertEqual(result.calls, 1)
-            XCTAssertEqual(result.state?.primaryResetObservation, abs(delta) <= 3 ? .stableObserved : .movingObserved)
+            XCTAssertEqual(result.state?.primaryResetObservation, abs(delta) <= 3 ? .stableObserved : .checking)
             XCTAssertEqual(result.state?.primaryResetEvidence != nil, abs(delta) <= 3)
         }
     }
@@ -140,6 +140,311 @@ final class QuotaStartupVerificationTests: XCTestCase {
             XCTAssertEqual(result.calls, 2)
             XCTAssertEqual(fixture.delays, [3])
             XCTAssertEqual(result.state?.primaryResetEvidence?.resetAt, reset)
+        }
+    }
+
+    /// 유효한 5시간 일정과 주간 일정의 최초 수신이 함께 확인되는지 검증
+    func testNewSecondaryScheduleIsRecheckedWithValidPrimaryCache() async {
+        for startup in [false, true] {
+            let fixture = StartupFixture()
+            defer { fixture.cleanup() }
+            let primary = fixture.start.addingTimeInterval(18_000)
+            let secondary = fixture.start.addingTimeInterval(604_800)
+            fixture.cache(reset: primary)
+            let result = await fixture.runSchedules(primary: [primary, primary], secondary: [secondary, secondary], startup: startup)
+            XCTAssertEqual(result.calls, 2)
+            XCTAssertEqual(fixture.delays, [3])
+            XCTAssertEqual(result.state?.secondaryResetObservation, .stableObserved)
+            XCTAssertNotNil(result.state?.secondaryResetEvidence)
+            XCTAssertEqual(AccountDashboardFormatting.observedResetDate(
+                result.state?.secondaryResetAt, observation: result.state?.secondaryResetObservation ?? .checking,
+                status: result.state?.status ?? .error, now: fixture.start), secondary)
+        }
+    }
+
+    /// 5시간 일정이 없어도 만료된 주간 일정의 갱신 재확인 검증
+    func testExpiredSecondaryScheduleIsRechecked() async {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let expired = fixture.start.addingTimeInterval(-1)
+        let refreshed = fixture.start.addingTimeInterval(604_800)
+        fixture.cacheSecondary(reset: expired)
+        let result = await fixture.runSchedules(primary: [nil, nil], secondary: [refreshed, refreshed], startup: false)
+        XCTAssertEqual(result.calls, 2)
+        XCTAssertEqual(fixture.delays, [3])
+    }
+
+    /// 유효 primary와 변경 없는 만료 secondary의 독립 재확인 검증
+    func testExpiredSecondaryRechecksEvenWhenFirstResponseIsUnchanged() async {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let primary = fixture.start.addingTimeInterval(18_000)
+        let expired = fixture.start.addingTimeInterval(-1)
+        fixture.cacheSchedules(primary: primary, secondary: expired, lastUpdated: fixture.start.addingTimeInterval(-30))
+        let result = await fixture.runSchedules(primary: [primary, primary], secondary: [expired, expired], startup: false)
+        XCTAssertEqual(result.calls, 2)
+        XCTAssertEqual(fixture.delays, [3])
+    }
+
+    /// reset 시각은 남았지만 timestamp 없는 캐시도 새 응답으로 재검증 확인
+    func testScheduleWithMissingCacheTimestampIsRechecked() async {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let primary = fixture.start.addingTimeInterval(18_000)
+        fixture.cacheSchedules(primary: primary, secondary: nil, lastUpdated: nil)
+        let result = await fixture.runSchedules(primary: [primary, primary], secondary: [nil, nil], startup: false)
+        XCTAssertEqual(result.calls, 2)
+        XCTAssertEqual(fixture.delays, [3])
+    }
+
+    /// primary만 바뀔 때 secondary 날짜·근거·재확인 예약 유지 검증
+    func testPrimaryOnlyVerificationPreservesSecondaryEvidenceAndReminder() async throws {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let primary = fixture.start.addingTimeInterval(18_000)
+        let changedPrimary = primary.addingTimeInterval(1_800)
+        let secondary = fixture.start.addingTimeInterval(604_800)
+        fixture.cacheSchedules(primary: primary, secondary: secondary, evidence: true)
+        var duringVerification: AccountState?
+        var alerts: [QuotaResetAlert] = []
+        let scheduler = QuotaResetScheduler(refresh: { _ in nil }, notify: { alerts.append($0) })
+        let result = await fixture.runSchedules(primary: [changedPrimary, changedPrimary], secondary: [secondary, secondary],
+            startup: false, duringSleep: { _, state in
+                duringVerification = state
+                scheduler.reconcile(states: [state], reminderMinutes: 5, now: fixture.start)
+            })
+        let interim = try XCTUnwrap(duringVerification)
+        XCTAssertTrue(interim.isPrimaryResetVerificationPending)
+        XCTAssertFalse(interim.isSecondaryResetVerificationPending)
+        XCTAssertEqual(interim.primaryResetObservation, .checking)
+        XCTAssertNil(interim.primaryResetEvidence)
+        XCTAssertEqual(interim.secondaryResetObservation, .stableObserved)
+        XCTAssertEqual(interim.secondaryResetEvidence?.resetAt, secondary)
+        XCTAssertEqual(interim.secondaryResetAt, secondary)
+        let state = try XCTUnwrap(result.state)
+        XCTAssertEqual(state.secondaryResetObservation, .stableObserved)
+        XCTAssertEqual(state.secondaryResetEvidence?.resetAt, secondary)
+        XCTAssertEqual(AccountDashboardFormatting.observedResetDate(
+            state.secondaryResetAt, observation: state.secondaryResetObservation, status: state.status, now: fixture.start
+        ), secondary)
+        XCTAssertEqual(state.secondaryResetSegmentID, interim.secondaryResetSegmentID)
+        scheduler.reconcile(states: [state], reminderMinutes: 5, now: fixture.start)
+        await scheduler.tick(now: secondary.addingTimeInterval(-5 * 60))
+        let weeklyAlerts = alerts.filter { $0.body.contains("7일 할당량") }
+        XCTAssertEqual(weeklyAlerts.count, 1)
+    }
+
+    /// secondary만 바뀔 때 primary 날짜·근거 및 양쪽 변경 시 대상 범위 검증
+    func testSecondaryOnlyAndBothWindowVerificationsUseIndependentTargets() async throws {
+        do {
+            let fixture = StartupFixture()
+            defer { fixture.cleanup() }
+            let primary = fixture.start.addingTimeInterval(18_000)
+            let secondary = fixture.start.addingTimeInterval(604_800)
+            let changed = secondary.addingTimeInterval(3_600)
+            fixture.cacheSchedules(primary: primary, secondary: secondary, evidence: true)
+            var duringVerification: AccountState?
+            let result = await fixture.runSchedules(primary: [primary, primary], secondary: [changed, changed],
+                startup: false, duringSleep: { _, state in duringVerification = state })
+            let interim = try XCTUnwrap(duringVerification)
+            XCTAssertFalse(interim.isPrimaryResetVerificationPending)
+            XCTAssertTrue(interim.isSecondaryResetVerificationPending)
+            XCTAssertEqual(interim.primaryResetObservation, .stableObserved)
+            XCTAssertEqual(interim.primaryResetEvidence?.resetAt, primary)
+            XCTAssertEqual(result.state?.primaryResetAt, primary)
+            XCTAssertEqual(result.state?.primaryResetEvidence?.resetAt, primary)
+        }
+        do {
+            let fixture = StartupFixture()
+            defer { fixture.cleanup() }
+            let primary = fixture.start.addingTimeInterval(18_000)
+            let secondary = fixture.start.addingTimeInterval(604_800)
+            fixture.cacheSchedules(primary: primary, secondary: secondary, evidence: true)
+            var duringVerification: AccountState?
+            let result = await fixture.runSchedules(primary: [primary.addingTimeInterval(1_800), primary.addingTimeInterval(1_800)],
+                secondary: [secondary.addingTimeInterval(3_600), secondary.addingTimeInterval(3_600)],
+                startup: false, duringSleep: { _, state in duringVerification = state })
+            let interim = try XCTUnwrap(duringVerification)
+            XCTAssertTrue(interim.isPrimaryResetVerificationPending)
+            XCTAssertTrue(interim.isSecondaryResetVerificationPending)
+            XCTAssertEqual(interim.primaryResetObservation, .checking)
+            XCTAssertEqual(interim.secondaryResetObservation, .checking)
+            XCTAssertEqual(result.state?.primaryResetObservation, .stableObserved)
+            XCTAssertEqual(result.state?.secondaryResetObservation, .stableObserved)
+        }
+    }
+
+    /// primary 재확인 2차 실패 후 secondary 고정 근거와 진행 상태 유지 검증
+    func testPrimaryVerificationFailurePreservesSecondaryEvidence() async {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let primary = fixture.start.addingTimeInterval(18_000)
+        let changed = primary.addingTimeInterval(1_800)
+        let secondary = fixture.start.addingTimeInterval(604_800)
+        fixture.cacheSchedules(primary: primary, secondary: secondary, evidence: true)
+        let result = await fixture.runSchedules(primary: [changed, changed], secondary: [secondary, secondary],
+            startup: false, statuses: [.normal, .timeout])
+        XCTAssertEqual(result.calls, 2)
+        XCTAssertEqual(result.state?.status, .timeout)
+        XCTAssertFalse(result.state?.isPrimaryResetVerificationPending ?? true)
+        XCTAssertFalse(result.state?.isSecondaryResetVerificationPending ?? true)
+        XCTAssertNil(result.state?.primaryResetEvidence)
+        XCTAssertEqual(result.state?.secondaryResetObservation, .stableObserved)
+        XCTAssertEqual(result.state?.secondaryResetEvidence?.resetAt, secondary)
+    }
+
+    /// primary 범위 완료가 2차 조회에서 변한 secondary 근거를 덮지 않는지 검증
+    func testPrimaryFinishLeavesUnrequestedSecondaryChangesUntouched() async throws {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let primary = fixture.start.addingTimeInterval(18_000)
+        let firstPrimary = primary.addingTimeInterval(1_800)
+        let secondary = fixture.start.addingTimeInterval(604_800)
+        let secondSecondary = secondary.addingTimeInterval(3_600)
+        fixture.cacheSchedules(primary: primary, secondary: secondary, evidence: true)
+        let source = StartupSource(states: [
+            AccountState(id: "C1", email: "fixture@example.invalid", planType: "plus",
+                primaryResetAt: firstPrimary, secondaryResetAt: secondary,
+                lastUpdated: fixture.start, status: .normal),
+            AccountState(id: "C1", email: "fixture@example.invalid", planType: "plus",
+                primaryResetAt: firstPrimary, secondaryResetAt: secondSecondary,
+                lastUpdated: fixture.start.addingTimeInterval(3), status: .normal)
+        ])
+        let store = AccountStore(configs: fixture.configs, preferencesStore: fixture.preferences) { _ in await source.read() }
+        store.observationNow = { fixture.start }
+        store.observationUptime = { fixture.elapsed }
+        _ = await store.refreshOutcome(accountID: "C1", forceFresh: true)
+        let first = try XCTUnwrap(store.state(for: "C1"))
+        store.beginResetVerification(expected: first, windows: [.primary])
+        _ = await store.refreshOutcome(accountID: "C1", forceFresh: true)
+        let second = try XCTUnwrap(store.state(for: "C1"))
+        let secondaryStateBeforeFinish = (
+            second.secondaryResetAt, second.secondaryResetObservation, second.secondaryResetEvidence,
+            second.secondaryResetSegmentID,
+            AccountDashboardFormatting.observedResetDate(second.secondaryResetAt,
+                observation: second.secondaryResetObservation, status: second.status, now: fixture.start)
+        )
+        store.finishResetVerification(expected: second, comparedTo: first, windows: [.primary])
+        let finished = try XCTUnwrap(store.state(for: "C1"))
+        XCTAssertEqual(finished.secondaryResetAt, secondaryStateBeforeFinish.0)
+        XCTAssertEqual(finished.secondaryResetObservation, secondaryStateBeforeFinish.1)
+        XCTAssertEqual(finished.secondaryResetEvidence, secondaryStateBeforeFinish.2)
+        XCTAssertEqual(finished.secondaryResetSegmentID, secondaryStateBeforeFinish.3)
+        XCTAssertEqual(AccountDashboardFormatting.observedResetDate(finished.secondaryResetAt,
+            observation: finished.secondaryResetObservation, status: finished.status, now: fixture.start), secondaryStateBeforeFinish.4)
+    }
+
+    /// primary 재확인 대기 취소 후 secondary의 날짜와 근거 유지 검증
+    func testCancellingPrimaryVerificationPreservesSecondaryEvidence() async throws {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let primary = fixture.start.addingTimeInterval(18_000)
+        let changed = primary.addingTimeInterval(1_800)
+        let secondary = fixture.start.addingTimeInterval(604_800)
+        fixture.cacheSchedules(primary: primary, secondary: secondary, evidence: true)
+        var sleeping = false
+        var duringVerification: AccountState?
+        let task = Task {
+            await fixture.runSchedules(primary: [changed, changed], secondary: [secondary, secondary],
+                startup: false, duringSleep: { _, state in duringVerification = state }, sleep: { _ in
+                    sleeping = true
+                    try await Task.sleep(for: .seconds(60))
+                })
+        }
+        for _ in 0..<10_000 where !sleeping { await Task.yield() }
+        XCTAssertTrue(sleeping)
+        task.cancel()
+        let result = await task.value
+        XCTAssertEqual(result.calls, 1)
+        let interim = try XCTUnwrap(duringVerification)
+        XCTAssertTrue(interim.isPrimaryResetVerificationPending)
+        XCTAssertEqual(interim.secondaryResetObservation, .stableObserved)
+        XCTAssertEqual(interim.secondaryResetEvidence?.resetAt, secondary)
+        XCTAssertFalse(result.state?.isPrimaryResetVerificationPending ?? true)
+        XCTAssertEqual(result.state?.secondaryResetEvidence?.resetAt, secondary)
+    }
+
+    /// 재확인 대기 중 계정 경로 교체 시 이전 계정 pending 상태 미반영 검증
+    func testAccountReplacementDuringVerificationDoesNotMutateNewSlot() async throws {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let primary = fixture.start.addingTimeInterval(18_000)
+        let changed = primary.addingTimeInterval(1_800)
+        let secondary = fixture.start.addingTimeInterval(604_800)
+        fixture.cacheSchedules(primary: primary, secondary: secondary, evidence: true)
+        var replacement: AccountState?
+        let result = await fixture.runSchedules(primary: [changed, changed], secondary: [secondary, secondary],
+            startup: false, duringSleep: { store, _ in
+                var configs = fixture.configs
+                configs[0] = AccountConfig(id: "C1", home: fixture.root.appendingPathComponent("new-c1"), position: .left)
+                store.reconfigure(configs)
+                replacement = store.state(for: "C1")
+            })
+        XCTAssertEqual(result.calls, 1)
+        let state = try XCTUnwrap(replacement)
+        XCTAssertEqual(state.configurationGeneration, 1)
+        XCTAssertFalse(state.isResetVerificationPending)
+        XCTAssertTrue(state.isWaitingForRefresh)
+    }
+
+    /// 재확인 중 별도 정상 조회가 새 스냅샷을 적용하면 이전 pending 미이월 검증
+    func testSuccessfulConcurrentRefreshDoesNotInheritStaleVerificationPending() async {
+        let fixture = StartupFixture()
+        defer { fixture.cleanup() }
+        let primary = fixture.start.addingTimeInterval(18_000)
+        let changed = primary.addingTimeInterval(1_800)
+        let secondary = fixture.start.addingTimeInterval(604_800)
+        fixture.cacheSchedules(primary: primary, secondary: secondary, evidence: true)
+        let source = StartupSource(states: [
+            AccountState(id: "C1", email: "fixture@example.invalid", planType: "plus",
+                primaryResetAt: changed, secondaryResetAt: secondary,
+                lastUpdated: fixture.start, status: .normal),
+            AccountState(id: "C1", email: "fixture@example.invalid", planType: "plus",
+                primaryResetAt: changed, secondaryResetAt: secondary,
+                lastUpdated: fixture.start.addingTimeInterval(3), status: .normal)
+        ])
+        let store = AccountStore(configs: fixture.configs, preferencesStore: fixture.preferences) { _ in await source.read() }
+        store.observationNow = { fixture.start.addingTimeInterval(fixture.elapsed) }
+        store.observationUptime = { fixture.elapsed }
+        var concurrentResult: AccountStore.RefreshOutcome?
+        let coordinator = QuotaRefreshCoordinator(store: store, now: { fixture.start.addingTimeInterval(fixture.elapsed) },
+            sleep: { seconds in
+                fixture.elapsed += seconds
+                concurrentResult = await store.refreshOutcome(accountID: "C1", forceFresh: true)
+            })
+        await coordinator.refresh(accountID: "C1")
+        XCTAssertTrue(concurrentResult?.isSuccess == true)
+        let state = store.state(for: "C1")
+        XCTAssertEqual(state?.lastUpdated, fixture.start.addingTimeInterval(3))
+        XCTAssertFalse(state?.isResetVerificationPending ?? true)
+    }
+
+    /// 한도별 단독 제공과 양쪽 누락에서 불필요한 반복 재확인 제외 검증
+    func testSingleWindowCachesAndMissingWindowsDoNotCauseRepeatedReads() async {
+        let primary = Date().addingTimeInterval(18_000)
+        let secondary = Date().addingTimeInterval(604_800)
+        do {
+            let fixture = StartupFixture()
+            defer { fixture.cleanup() }
+            fixture.cacheSecondary(reset: secondary)
+            let result = await fixture.runSchedules(primary: [nil], secondary: [secondary], startup: false)
+            XCTAssertEqual(result.calls, 1)
+            XCTAssertEqual(fixture.delays, [])
+        }
+        do {
+            let fixture = StartupFixture()
+            defer { fixture.cleanup() }
+            fixture.cache(reset: primary)
+            let result = await fixture.runSchedules(primary: [primary], secondary: [nil], startup: false)
+            XCTAssertEqual(result.calls, 1)
+            XCTAssertEqual(fixture.delays, [])
+        }
+        do {
+            let fixture = StartupFixture()
+            defer { fixture.cleanup() }
+            let result = await fixture.runSchedules(primary: [nil], secondary: [nil], startup: false)
+            XCTAssertEqual(result.calls, 1)
+            XCTAssertEqual(fixture.delays, [])
         }
     }
 
@@ -195,6 +500,31 @@ private final class StartupFixture {
             primaryResetEvidence: evidence ? ResetTimeEvidence(resetAt: reset, observedAt: start.addingTimeInterval(-30)) : nil))
     }
 
+    /// 주간 일정만 포함한 캐시 생성
+    func cacheSecondary(reset: Date) {
+        preferences.updateQuotaSnapshot(for: configs[0].home, snapshot: .init(
+            secondaryUsedPercent: 20, secondaryResetAt: reset,
+            lastUpdated: start.addingTimeInterval(-30), email: "fixture@example.invalid", planType: "plus"))
+    }
+
+    /// 선택된 한도 시각과 캐시 갱신 시각 생성
+    func cacheSchedules(primary: Date?, secondary: Date?, lastUpdated: Date?) {
+        preferences.updateQuotaSnapshot(for: configs[0].home, snapshot: .init(
+            resetAt: primary, secondaryResetAt: secondary,
+            lastUpdated: lastUpdated,
+            email: "fixture@example.invalid", planType: "plus"))
+    }
+
+    /// 양쪽 고정 근거가 포함된 캐시 생성
+    func cacheSchedules(primary: Date?, secondary: Date?, evidence: Bool) {
+        let observedAt = start.addingTimeInterval(-30)
+        preferences.updateQuotaSnapshot(for: configs[0].home, snapshot: .init(
+            resetAt: primary, secondaryResetAt: secondary, lastUpdated: observedAt,
+            email: "fixture@example.invalid", planType: "plus",
+            primaryResetEvidence: evidence ? primary.map { ResetTimeEvidence(resetAt: $0, observedAt: observedAt) } : nil,
+            secondaryResetEvidence: evidence ? secondary.map { ResetTimeEvidence(resetAt: $0, observedAt: observedAt) } : nil))
+    }
+
     /// 지정 시각을 반환하는 모의 계정 조회와 3초 가상 대기 수행
     func run(resets: [Date], startup: Bool) async -> (calls: Int, state: AccountState?) {
         let states = resets.enumerated().map { index, reset in
@@ -209,6 +539,33 @@ private final class StartupFixture {
             now: { self.start.addingTimeInterval(self.elapsed) }, sleep: { seconds in
                 self.delays.append(seconds)
                 self.elapsed += seconds
+            })
+        await coordinator.refresh(accountID: "C1", startup: startup)
+        return (await source.calls, store.state(for: "C1"))
+    }
+
+    /// 두 한도의 시각 응답과 가상 3초 대기 수행
+    func runSchedules(
+        primary: [Date?], secondary: [Date?], startup: Bool,
+        statuses: [AccountStatus]? = nil,
+        duringSleep: ((AccountStore, AccountState) -> Void)? = nil,
+        sleep: ((TimeInterval) async throws -> Void)? = nil
+    ) async -> (calls: Int, state: AccountState?) {
+        let states = primary.indices.map { index in
+            AccountState(id: "C1", email: "fixture@example.invalid", planType: "plus",
+                primaryResetAt: primary[index], secondaryResetAt: secondary[index],
+                lastUpdated: start.addingTimeInterval(Double(index) * 3), status: statuses?[index] ?? .normal)
+        }
+        let source = StartupSource(states: states)
+        let store = AccountStore(configs: configs, preferencesStore: preferences) { _ in await source.read() }
+        store.observationNow = { self.start.addingTimeInterval(self.elapsed) }
+        store.observationUptime = { self.elapsed }
+        let coordinator = QuotaRefreshCoordinator(store: store,
+            now: { self.start.addingTimeInterval(self.elapsed) }, sleep: { seconds in
+                self.delays.append(seconds)
+                if let state = store.state(for: "C1") { duringSleep?(store, state) }
+                if let sleep { try await sleep(seconds) }
+                else { self.elapsed += seconds }
             })
         await coordinator.refresh(accountID: "C1", startup: startup)
         return (await source.calls, store.state(for: "C1"))

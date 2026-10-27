@@ -60,6 +60,51 @@ final class ResetTimeObservationTests: XCTestCase {
         }
     }
 
+    /// primary·secondary 단발 ±20초 보정을 이동으로 오인하지 않는지 검증
+    func testSingleTwentySecondCorrectionRemainsChecking() async {
+        for primary in [true, false] {
+            for delta in [-20.0, 20.0] {
+                let originalPrimary = start.addingTimeInterval(18_000)
+                let originalSecondary = start.addingTimeInterval(604_800)
+                let prior = AccountState(id: "C1", email: "fixture@example.test", planType: "plus",
+                    primaryResetAt: originalPrimary, secondaryResetAt: originalSecondary,
+                    lastUpdated: start.addingTimeInterval(-30), status: .normal)
+                var current = prior
+                current.lastUpdated = start
+                if primary { current.primaryResetAt = originalPrimary.addingTimeInterval(delta) }
+                else { current.secondaryResetAt = originalSecondary.addingTimeInterval(delta) }
+                let state = await finishVerification(prior: prior, current: current)
+                let observation = primary ? state?.primaryResetObservation : state?.secondaryResetObservation
+                let reset = primary ? state?.primaryResetAt : state?.secondaryResetAt
+                let evidence = primary ? state?.primaryResetEvidence : state?.secondaryResetEvidence
+                XCTAssertEqual(observation, .checking)
+                XCTAssertNil(evidence)
+                XCTAssertEqual(AccountDashboardFormatting.resetScheduleStatusText(
+                    reset, observation: observation ?? .stableObserved, status: .normal, now: start
+                ), "초기화 시각 확인 중")
+            }
+        }
+    }
+
+    /// 단발 보정 뒤 동일한 후속 관측으로 고정 근거 복구 검증
+    func testSingleCorrectionCanRecoverOnFollowUpFixedReading() async throws {
+        let original = start.addingTimeInterval(18_000)
+        let prior = AccountState(id: "C1", email: "fixture@example.test", planType: "plus",
+            primaryResetAt: original, lastUpdated: start.addingTimeInterval(-30), status: .normal)
+        let correction = AccountState(id: "C1", email: "fixture@example.test", planType: "plus",
+            primaryResetAt: original.addingTimeInterval(20), lastUpdated: start, status: .normal)
+        let firstResult = await finishVerification(prior: prior, current: correction)
+        let first = try XCTUnwrap(firstResult)
+        XCTAssertEqual(first.primaryResetObservation, .checking)
+        let repeated = AccountState(id: "C1", email: "fixture@example.test", planType: "plus",
+            primaryResetAt: correction.primaryResetAt, lastUpdated: start.addingTimeInterval(3), status: .normal)
+        let recovered = await finishVerification(prior: first, current: repeated)
+        XCTAssertEqual(recovered?.primaryResetObservation, .stableObserved)
+        XCTAssertEqual(recovered?.primaryResetEvidence?.resetAt, correction.primaryResetAt)
+        let observedAt = try XCTUnwrap(repeated.lastUpdated)
+        XCTAssertTrue(recovered?.primaryResetEvidence?.matches(correction.primaryResetAt, now: observedAt) == true)
+    }
+
     /// 1초 잡음이 있는 고정 시각과 이동 시각의 독립 판정 검증
     func testFirstReadingAcceptsResetAndLaterReadingsDetectMovement() {
         var stable = ResetTimeTracker()
@@ -204,9 +249,36 @@ final class ResetTimeObservationTests: XCTestCase {
         var state = AccountState(id: "C1", primaryResetAt: start.addingTimeInterval(18_000), status: .normal)
         state.primaryResetObservation = .stableObserved
         state.primaryResetSegmentID = UUID()
+        state.isPrimaryResetVerificationPending = true
         let restored = try JSONDecoder().decode(AccountState.self, from: JSONEncoder().encode(state))
         XCTAssertEqual(restored.primaryResetObservation, .checking)
         XCTAssertNil(restored.primaryResetSegmentID)
+        XCTAssertFalse(restored.isResetVerificationPending)
+    }
+
+    /// 격리 계정 저장소로 조회·검증 결과 반영
+    private func finishVerification(prior: AccountState, current: AccountState) async -> AccountState? {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "ResetTimeObservationTests.Finish.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let configs = AccountConfig.accounts(for: [root.appendingPathComponent("c1").path, "", "", ""])
+        let preferences = PreferencesStore(userDefaults: defaults,
+            defaultPaths: configs.map { $0.home.path }, quotaDatabaseURL: root.appendingPathComponent("quota.sqlite"))
+        let store = AccountStore(configs: configs, preferencesStore: preferences) { _ in current }
+        let observedAt = current.lastUpdated ?? start
+        let uptime = current.lastUpdated.flatMap { latest in
+            prior.lastUpdated.map { latest.timeIntervalSince($0) }
+        } ?? 0
+        store.observationNow = { observedAt }
+        store.observationUptime = { uptime }
+        _ = await store.refreshOutcome(accountID: "C1", forceFresh: true)
+        guard let expected = store.state(for: "C1") else { return nil }
+        store.finishResetVerification(expected: expected, comparedTo: prior)
+        return store.state(for: "C1")
     }
 
     /// 고정 시각 3회 관측 fixture 구성

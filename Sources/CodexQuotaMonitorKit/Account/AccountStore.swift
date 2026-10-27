@@ -56,6 +56,7 @@ public final class AccountStore: ObservableObject {
     private var shuttingDown = false
     private var appliedRequestIDs: [String: UUID] = [:]
     private var latestRequestIDs: [String: UUID] = [:]
+    private var refreshRecoveryStates: [String: AccountState] = [:]
     private var resetHistories: [String: ResetHistory] = [:]
     /// 실제 실행 중 수집한 정상 응답만 초기화 감지 기준으로 사용
     private var resetBaselines: [String: AccountState] = [:]
@@ -102,32 +103,55 @@ public final class AccountStore: ObservableObject {
     public var accountStates: [AccountState] { states }
 
     /// 큰 일정 변경 직후 이전 고정 근거 제거 및 재확인 상태 저장
-    public func beginResetVerification(expected: AccountState) {
+    public func beginResetVerification(
+        expected: AccountState,
+        windows: [EarlyQuotaReset.Window] = [.primary, .secondary]
+    ) {
         guard let index = verificationIndex(expected) else { return }
         var state = states[index]
-        state.isResetVerificationPending = true
-        state.primaryResetObservation = .checking
-        state.secondaryResetObservation = .checking
-        state.primaryResetEvidence = nil
-        state.secondaryResetEvidence = nil
+        for window in windows {
+            if window == .primary {
+                state.isPrimaryResetVerificationPending = true
+                state.primaryResetObservation = .checking
+                state.primaryResetEvidence = nil
+            } else {
+                state.isSecondaryResetVerificationPending = true
+                state.secondaryResetObservation = .checking
+                state.secondaryResetEvidence = nil
+            }
+        }
         states[index] = state
         saveVerifiedSnapshot(state)
     }
 
     /// 취소·실패 후 진행 중 안내 해제; 이전 고정 근거의 부활 제외
-    public func endResetVerification(expected: AccountState) {
-        guard let index = verificationIndex(expected) else { return }
-        states[index].isResetVerificationPending = false
+    public func endResetVerification(
+        expected: AccountState,
+        windows: [EarlyQuotaReset.Window] = [.primary, .secondary]
+    ) {
+        guard let index = verificationIndex(expected, allowLoading: true, allowFailure: true) else { return }
+        var state = states[index]
+        clearResetVerification(in: &state, windows: windows)
+        states[index] = state
+        if var recovery = refreshRecoveryStates[expected.id], matchesVerification(recovery, expected: expected) {
+            clearResetVerification(in: &recovery, windows: windows)
+            refreshRecoveryStates[expected.id] = recovery
+        }
     }
 
     /// 최대 3초 오차 유지 및 조회 경과에 비례한 이동의 고정 오인 차단
-    public func finishResetVerification(expected: AccountState, comparedTo previous: AccountState) {
+    public func finishResetVerification(
+        expected: AccountState,
+        comparedTo previous: AccountState,
+        windows: [EarlyQuotaReset.Window] = [.primary, .secondary]
+    ) {
         guard let index = verificationIndex(expected), previous.acceptsIdentity(of: expected),
               let updated = expected.lastUpdated,
               previous.lastUpdated.map({ updated > $0 }) == true else { return }
         var state = states[index]
         let now = observationNow()
-        for primary in [true, false] {
+        for window in windows {
+            let primary = window == .primary
             let reset = primary ? state.primaryResetAt : state.secondaryResetAt
             let old = primary ? previous.primaryResetAt : previous.secondaryResetAt
             let priorEvidence = primary ? previous.primaryResetEvidence : previous.secondaryResetEvidence
@@ -138,22 +162,50 @@ public final class AccountStore: ObservableObject {
             let trusted = priorEvidence?.matches(reset, now: now) == true
             let stable = valid && delta.map({ abs($0) <= ResetTimeTracker.resetTolerance }) == true
                 && (trusted || !followsClock)
-            let observation: ResetTimeObservation = stable ? .stableObserved : (valid && old != nil ? .movingObserved : .checking)
+            let trackerObservedMoving = primary
+                ? state.primaryResetObservation == .movingObserved
+                : state.secondaryResetObservation == .movingObserved
+            let observation: ResetTimeObservation = stable ? .stableObserved
+                : (valid && (followsClock || trackerObservedMoving) ? .movingObserved : .checking)
             let evidence = stable ? ResetTimeEvidence(resetAt: reset!, observedAt: updated) : nil
             if primary { state.primaryResetObservation = observation; state.primaryResetEvidence = evidence }
             else { state.secondaryResetObservation = observation; state.secondaryResetEvidence = evidence }
         }
-        state.isResetVerificationPending = false
+        clearResetVerification(in: &state, windows: windows)
         states[index] = state
         recordObservation(state, previous: previous)
         saveVerifiedSnapshot(state)
     }
 
+    /// 지정 한도의 재확인 상태만 해제
+    private func clearResetVerification(in state: inout AccountState, windows: [EarlyQuotaReset.Window]) {
+        for window in windows {
+            if window == .primary { state.isPrimaryResetVerificationPending = false }
+            else { state.isSecondaryResetVerificationPending = false }
+        }
+    }
+
     /// 대기 중 새 요청·계정 변경으로 교체된 스냅샷의 덮어쓰기 차단
-    private func verificationIndex(_ expected: AccountState) -> Int? {
-        states.firstIndex { $0.status == .normal && $0.id == expected.id && $0.acceptsIdentity(of: expected)
-            && $0.lastUpdated == expected.lastUpdated && $0.primaryResetAt == expected.primaryResetAt
-            && $0.secondaryResetAt == expected.secondaryResetAt }
+    private func verificationIndex(
+        _ expected: AccountState, allowLoading: Bool = false, allowFailure: Bool = false
+    ) -> Int? {
+        states.firstIndex {
+            matchesVerification($0, expected: expected, allowLoading: allowLoading, allowFailure: allowFailure)
+        }
+    }
+
+    /// 재확인 대상의 계정·세대·스냅샷 일치 여부 판별
+    private func matchesVerification(
+        _ state: AccountState, expected: AccountState, allowLoading: Bool = false, allowFailure: Bool = false
+    ) -> Bool {
+        let statusMatches = state.status == .normal || (allowLoading && state.status == .loading)
+            || (allowFailure && [.timeout, .error].contains(state.status))
+        let identityMatches = state.status == .loading && allowLoading
+            ? state.email == expected.email && state.planType == expected.planType
+            : state.acceptsIdentity(of: expected)
+        return statusMatches && state.id == expected.id && state.configurationGeneration == expected.configurationGeneration
+            && identityMatches && state.lastUpdated == expected.lastUpdated
+            && state.primaryResetAt == expected.primaryResetAt && state.secondaryResetAt == expected.secondaryResetAt
     }
 
     /// 검증 결과와 계정 식별 정보를 같은 경로 캐시에 저장
@@ -259,6 +311,8 @@ public final class AccountStore: ObservableObject {
         let revision = state(for: id)?.configurationGeneration ?? 0
         accountGenerations[id, default: 0] += 1
         let previous = state(for: id)
+        let recovery = previous?.isRefreshing == true ? (refreshRecoveryStates[id] ?? previous) : previous
+        if previous?.isRefreshing != true, let previous { refreshRecoveryStates[id] = previous }
         states = states.map { state in
             guard state.id == id else { return state }
             return Self.loadingState(for: config, previous: previous)
@@ -274,12 +328,30 @@ public final class AccountStore: ObservableObject {
         guard !Task.isCancelled, !shuttingDown, configs.first(where: { $0.id == id }) == config,
               state(for: id)?.configurationGeneration == revision,
               latestRequestIDs[id] == result.requestID else {
+            restoreCancelledRefresh(result: result, previous: recovery, config: config, revision: revision)
             logQuotaResult(.quotaResultDiscarded, result: result, reason: "superseded")
             return .superseded
         }
         let shouldApply = appliedRequestIDs[id] != result.requestID
         if shouldApply { apply(result) }
         return result.state.status == .normal ? .succeeded(applied: shouldApply) : .failed
+    }
+
+    /// 현재 요청이 취소된 경우에만 직전 스냅샷 복원
+    private func restoreCancelledRefresh(result: AccountFetchResult, previous: AccountState?, config: AccountConfig, revision: Int) {
+        guard Task.isCancelled, !shuttingDown, configs.first(where: { $0.id == config.id }) == config,
+              latestRequestIDs[config.id] == result.requestID,
+              activeFetches[result.requestID]?.waiters.hasWaiters != true,
+              let index = states.firstIndex(where: { $0.id == config.id }),
+              states[index].configurationGeneration == revision, states[index].status == .loading,
+              let previous, previous.configurationGeneration == revision else { return }
+        var restored = refreshRecoveryStates[config.id] ?? previous
+        guard restored.configurationGeneration == revision else { return }
+        if restored.status == .loading, !restored.isWaitingForRefresh {
+            restored.isWaitingForRefresh = true
+        }
+        states[index] = restored
+        refreshRecoveryStates[config.id] = nil
     }
 
     /// Convenience spelling for callers holding an account configuration.
@@ -310,6 +382,7 @@ public final class AccountStore: ObservableObject {
                 inFlightFetches[key] = nil
             }
             latestRequestIDs[config.id] = nil
+            refreshRecoveryStates[config.id] = nil
             resetHistories[config.id] = nil
             resetBaselines[config.id] = nil
             var initial = Self.initialState(for: config, preferencesStore: preferencesStore)
@@ -421,9 +494,11 @@ public final class AccountStore: ObservableObject {
             handle.waiters.remove(waiterID)
         }
         handle.waiters.remove(waiterID)
-        activeFetches[handle.requestID] = nil
-        if inFlightFetches[key] === handle {
-            inFlightFetches[key] = nil
+        if !handle.waiters.hasWaiters {
+            activeFetches[handle.requestID] = nil
+            if inFlightFetches[key] === handle {
+                inFlightFetches[key] = nil
+            }
         }
         return result
     }
@@ -551,6 +626,7 @@ public final class AccountStore: ObservableObject {
                         var preserved = states[index]
                         preserved.status = .normal
                         states[index] = preserved
+                        refreshRecoveryStates[state.id] = nil
                         logQuotaResult(.quotaResultDiscarded, result: result, reason: "stale_snapshot")
                         return
                     }
@@ -619,6 +695,7 @@ public final class AccountStore: ObservableObject {
             }
         }
         states[index] = state
+        refreshRecoveryStates[state.id] = nil
         logQuotaResult(.quotaResultApplied, result: result)
         guard result.config.isConfigured, result.state.status == .normal else { return }
         let resetNotification = EarlyQuotaReset.notification(accountID: state.id, changes: changes, now: observationNow())

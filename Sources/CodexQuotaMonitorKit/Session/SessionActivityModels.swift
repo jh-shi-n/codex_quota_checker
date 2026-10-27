@@ -175,6 +175,31 @@ enum SessionActivityMetadataSanitizer {
         return String(normalized.prefix(maximumLength))
     }
 
+    /// 모델 식별자의 ASCII·길이 제한 및 표시용 대소문자 정규화
+    static func modelIdentifier(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, normalized.count <= 64,
+              normalized.unicodeScalars.allSatisfy({
+                  CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-").contains($0)
+              }),
+              normalized.first?.isLetter == true, normalized.last?.isLetter == true || normalized.last?.isNumber == true
+        else { return nil }
+        let parts = normalized.lowercased().split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count >= 2, parts.allSatisfy({ !$0.isEmpty }) else { return nil }
+        return parts.enumerated().map { index, part in
+            index == 0 && part == "gpt" ? "GPT" : String(part).capitalized
+        }.joined(separator: "-")
+    }
+
+    /// 지원하는 추론 등급만 소문자로 제한
+    static func reasoningEffort(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].contains(normalized)
+            ? normalized : nil
+    }
+
     /// Returns only the final component of an agent path after converting it
     /// into a safe, title-shaped value. The raw path is never returned.
     static func agentPathComponent(_ value: String?) -> String? {
@@ -202,6 +227,9 @@ public struct SessionActivityAgent: Identifiable, Equatable, Sendable {
     /// Privacy-filtered task text. It is never a raw path or prompt.
     public let taskName: String
     public let status: SessionActivityStatus
+    /// 세션별 모델·추론 등급 메타데이터
+    public let model: String?
+    public let reasoningEffort: String?
 
     public var id: String { threadID }
     /// Compatibility alias for callers that use the generic display label.
@@ -212,7 +240,9 @@ public struct SessionActivityAgent: Identifiable, Equatable, Sendable {
         parentThreadID: String?,
         taskName: String,
         status: SessionActivityStatus,
-        displayName: String? = nil
+        displayName: String? = nil,
+        model: String? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.threadID = threadID
         self.parentThreadID = parentThreadID
@@ -221,6 +251,8 @@ public struct SessionActivityAgent: Identifiable, Equatable, Sendable {
             ?? "Agent"
         self.taskName = SessionActivityMetadataSanitizer.text(taskName) ?? "Agent"
         self.status = status
+        self.model = SessionActivityMetadataSanitizer.modelIdentifier(model)
+        self.reasoningEffort = SessionActivityMetadataSanitizer.reasoningEffort(reasoningEffort)
     }
 
     public init(
@@ -228,14 +260,18 @@ public struct SessionActivityAgent: Identifiable, Equatable, Sendable {
         parentThreadID: String?,
         label: String,
         status: SessionActivityStatus,
-        taskName: String? = nil
+        taskName: String? = nil,
+        model: String? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.init(
             threadID: threadID,
             parentThreadID: parentThreadID,
             taskName: taskName ?? label,
             status: status,
-            displayName: label
+            displayName: label,
+            model: model,
+            reasoningEffort: reasoningEffort
         )
     }
 }
@@ -255,6 +291,9 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
     /// Safe public progress metadata. SQLite fallback leaves these values nil.
     public let planStep: String?
     public let activeOperation: String?
+    /// 메인 세션에서 관측한 모델·추론 등급
+    public let model: String?
+    public let reasoningEffort: String?
     /// Last metadata activity used only for deterministic card ordering.
     public let lastActivityAt: Date?
 
@@ -276,7 +315,9 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
         activeOperation: String? = nil,
         lastActivityAt: Date? = nil,
         turnID: String? = nil,
-        turnEventAt: Date? = nil
+        turnEventAt: Date? = nil,
+        model: String? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.threadID = threadID
         self.source = source
@@ -289,6 +330,8 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
         self.planStep = SessionActivityMetadataSanitizer.text(planStep)
         self.activeOperation = SessionActivityOperationCategory.normalize(raw: activeOperation)
         self.lastActivityAt = lastActivityAt
+        self.model = SessionActivityMetadataSanitizer.modelIdentifier(model)
+        self.reasoningEffort = SessionActivityMetadataSanitizer.reasoningEffort(reasoningEffort)
     }
 
     public init(
@@ -302,7 +345,9 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
         activeOperation: String? = nil,
         lastActivityAt: Date? = nil,
         turnID: String? = nil,
-        turnEventAt: Date? = nil
+        turnEventAt: Date? = nil,
+        model: String? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.init(
             threadID: sessionID,
@@ -315,7 +360,9 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
             activeOperation: activeOperation,
             lastActivityAt: lastActivityAt,
             turnID: turnID,
-            turnEventAt: turnEventAt
+            turnEventAt: turnEventAt,
+            model: model,
+            reasoningEffort: reasoningEffort
         )
     }
 
@@ -332,7 +379,9 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
         activeOperation: String? = nil,
         lastActivityAt: Date? = nil,
         turnID: String? = nil,
-        turnEventAt: Date? = nil
+        turnEventAt: Date? = nil,
+        model: String? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.init(
             threadID: threadID,
@@ -345,7 +394,9 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
             activeOperation: activeOperation,
             lastActivityAt: lastActivityAt,
             turnID: turnID,
-            turnEventAt: turnEventAt
+            turnEventAt: turnEventAt,
+            model: model,
+            reasoningEffort: reasoningEffort
         )
     }
 }

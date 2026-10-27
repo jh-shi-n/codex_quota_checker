@@ -25,12 +25,13 @@ struct SQLiteSessionActivityProjectionCounts: Equatable, Sendable {
 public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unchecked Sendable {
     public static let allowedThreadColumns = [
         "id", "updated_at", "archived", "name", "title", "agent_role", "agent_nickname", "agent_path", "thread_source",
+        "model", "reasoning_effort",
     ]
     public static let allowedEdgeColumns = [
         "parent_thread_id", "child_thread_id", "status",
     ]
 
-    public static let threadProjectionSQL = "SELECT id, updated_at, archived, name, title, agent_role, agent_nickname, agent_path, thread_source FROM threads"
+    public static let threadProjectionSQL = "SELECT id, updated_at, archived, name, title, agent_role, agent_nickname, agent_path, thread_source, model, reasoning_effort FROM threads"
     public static let edgeProjectionSQL = "SELECT parent_thread_id, child_thread_id, status FROM thread_spawn_edges"
     public static let defaultRecentActivityWindow: TimeInterval = 15 * 60
     /// A descendant's open/waiting state is active only when its own metadata
@@ -82,15 +83,18 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
     )
     """
 
-    private static let boundedThreadProjectionSQL = """
+    /// 선택 열의 존재 여부를 반영한 제한 스레드 조회문 구성
+    private static func boundedThreadProjectionSQL(modelExpression: String, reasoningEffortExpression: String) -> String {
+        """
     \(relatedIDsCTE)
     SELECT t.id, t.updated_at, t.archived, t.name, t.title, t.agent_role,
-           t.agent_nickname, t.agent_path, t.thread_source
+           t.agent_nickname, t.agent_path, t.thread_source, \(modelExpression), \(reasoningEffortExpression)
     FROM threads AS t
     JOIN related_ids AS related ON related.id = t.id
     ORDER BY t.updated_at DESC, t.id ASC
     LIMIT ?
     """
+    }
 
     private static let boundedEdgeProjectionSQL = """
     \(relatedIDsCTE)
@@ -193,7 +197,8 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
                 // 시작 이벤트가 오래 남아도 기존 메타데이터의 활동 만료 기준 유지
                 status: turn.status == .working ? session.status : turn.status,
                 agents: session.agents, isActive: session.isActive,
-                lastActivityAt: session.lastActivityAt, turnID: turn.turnID, turnEventAt: turn.occurredAt
+                lastActivityAt: session.lastActivityAt, turnID: turn.turnID, turnEventAt: turn.occurredAt,
+                model: session.model, reasoningEffort: session.reasoningEffort
             ))
         }
         return SessionActivitySnapshot(accountID: accountID, state: snapshot.state,
@@ -273,9 +278,13 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
         lowerBound: TimeInterval,
         upperBound: TimeInterval
     ) -> [ThreadRow]? {
-        readRows(
+        let availableColumns = availableThreadColumns(database)
+        return readRows(
             database,
-            sql: Self.boundedThreadProjectionSQL,
+            sql: Self.boundedThreadProjectionSQL(
+                modelExpression: availableColumns.contains("model") ? "t.model" : "NULL",
+                reasoningEffortExpression: availableColumns.contains("reasoning_effort") ? "t.reasoning_effort" : "NULL"
+            ),
             bind: { statement in
                 self.bindActivityBounds(
                     statement,
@@ -295,9 +304,24 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
                 role: text(statement, index: 5),
                 nickname: text(statement, index: 6),
                 agentPath: text(statement, index: 7),
-                source: text(statement, index: 8)
+                source: text(statement, index: 8),
+                model: text(statement, index: 9),
+                reasoningEffort: text(statement, index: 10)
             )
         }
+    }
+
+    /// 구형 SQLite threads 스키마의 선택 열 집합 조회
+    private func availableThreadColumns(_ database: OpaquePointer) -> Set<String> {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA table_info(threads)", -1, &statement, nil) == SQLITE_OK,
+              let statement else { return [] }
+        defer { sqlite3_finalize(statement) }
+        var columns: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let column = text(statement, index: 1) { columns.insert(column) }
+        }
+        return columns
     }
 
     private func readEdges(
@@ -427,7 +451,9 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
                     displayName: sanitizedDisplayName(
                         nickname: thread.nickname,
                         role: thread.role
-                    )
+                    ),
+                    model: thread.model,
+                    reasoningEffort: thread.reasoningEffort
                 )
             }
             return SessionActivityMainSession(
@@ -446,7 +472,9 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
                 ),
                 agents: agents,
                 isActive: true,
-                lastActivityAt: candidate.latestActivityAt
+                lastActivityAt: candidate.latestActivityAt,
+                model: candidate.root.model,
+                reasoningEffort: candidate.root.reasoningEffort
             )
         })
         let first = sessions[0]
@@ -605,6 +633,8 @@ private struct ThreadRow {
     let nickname: String?
     let agentPath: String?
     let source: String?
+    let model: String?
+    let reasoningEffort: String?
 }
 
 private struct RootCandidate {

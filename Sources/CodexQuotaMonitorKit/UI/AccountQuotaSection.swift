@@ -30,6 +30,7 @@ public struct AccountQuotaSection: View {
                         remaining: account.fiveHourRemainingPercent,
                         resetAt: account.primaryResetAt,
                         observation: account.primaryResetObservation,
+                        isVerificationPending: account.isPrimaryResetVerificationPending,
                         now: context.date
                     )
                     quotaCard(
@@ -38,6 +39,7 @@ public struct AccountQuotaSection: View {
                         remaining: account.overallRemainingPercent,
                         resetAt: account.secondaryResetAt,
                         observation: account.secondaryResetObservation,
+                        isVerificationPending: account.isSecondaryResetVerificationPending,
                         now: context.date
                     )
                 }
@@ -53,6 +55,7 @@ public struct AccountQuotaSection: View {
         remaining: Double?,
         resetAt: Date?,
         observation: ResetTimeObservation,
+        isVerificationPending: Bool,
         now: Date
     ) -> some View {
         let displayedReset = AccountDashboardFormatting.observedResetDate(
@@ -88,7 +91,7 @@ public struct AccountQuotaSection: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Text(account.isResetVerificationPending ? "초기화 시각 재확인 중" : AccountDashboardFormatting.resetScheduleStatusText(
+            Text(isVerificationPending ? "초기화 시각 재확인 중" : AccountDashboardFormatting.resetScheduleStatusText(
                 resetAt, observation: observation, status: account.status, now: now
             ))
                 .font(.caption2)

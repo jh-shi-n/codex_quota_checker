@@ -206,17 +206,17 @@ public struct AccountDetailView: View {
     private var accountActivity: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("세션 실행 기록")
+                Text("활성 세션")
                     .font(.headline.weight(.semibold))
             }
 
-            Text("해당 계정의 CLI 세션 기록을 표시합니다. Codex Desktop 앱의 실행 내역은 표시되지 않을 수 있습니다.")
+            Text("해당 계정의 최근 15분 CLI 활동을 표시합니다. Codex Desktop 앱 활동은 표시되지 않을 수 있습니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if account.status == .notConfigured {
-                Text("계정의 CLI 폴더를 등록하면 활동 기록을 확인할 수 있습니다.")
+                Text("계정의 CLI 폴더를 등록하면 활성 세션을 확인할 수 있습니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -20,6 +20,7 @@ struct AccountTokenUsageView: View {
     var options = TokenUsageOptions()
     @State private var selectedDate: Date?
     @State private var weekOffset = 0
+    @State private var isUsageHelpPresented = false
 
     private var snapshot: AccountTokenUsage? { store.snapshot(for: account) }
     private var localToday: TokenUsageSnapshot? { store.localTodaySnapshot(for: account) }
@@ -57,11 +58,29 @@ struct AccountTokenUsageView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text("계정 토큰 사용량").font(.headline.weight(.semibold))
-                Image(systemName: "info.circle")
-                    .foregroundStyle(.secondary)
-                    .help(usageHelp)
-                    .accessibilityLabel("토큰 사용량 안내")
-                    .accessibilityValue(usageHelp)
+                Button { isUsageHelpPresented.toggle() } label: {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.appIcon)
+                .help(usageHelp)
+                .accessibilityIdentifier("account-token-usage-info-button")
+                .accessibilityLabel("토큰 사용량 안내")
+                .accessibilityValue(usageHelp)
+                .popover(isPresented: $isUsageHelpPresented, arrowEdge: .bottom) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("토큰 사용량 안내")
+                                .font(.headline)
+                            Text(usageHelp)
+                                .font(.callout)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                    }
+                    .frame(width: 320, height: 360)
+                }
                 if !options.weeklyChartEnabled { Text("(최근 24주)").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
             }
@@ -89,7 +108,9 @@ struct AccountTokenUsageView: View {
         .onChange(of: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") { _, _ in
             selectedDate = nil
             weekOffset = 0
+            isUsageHelpPresented = false
         }
+        .onDisappear { isUsageHelpPresented = false }
         .onChange(of: options) { _, _ in selectedDate = nil; weekOffset = 0 }
     }
 

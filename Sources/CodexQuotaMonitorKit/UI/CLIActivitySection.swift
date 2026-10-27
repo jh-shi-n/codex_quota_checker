@@ -8,9 +8,9 @@ public typealias SessionActivitySnapshotSink = @MainActor @Sendable (SessionActi
 
 /// Popover content for one account's local CLI/Codex App activity.
 public struct CLIActivitySection: View {
-    public static let loadingText = "세션 실행 기록을 불러오는 중입니다…"
-    public static let emptyText = "최근 15분간 실행 기록이 없습니다."
-    public static let unavailableText = AppErrorCode.sessionRead.message("세션 실행 기록을 불러올 수 없습니다.")
+    public static let loadingText = "활성 세션을 불러오는 중입니다…"
+    public static let emptyText = "최근 15분간 활성 세션이 없습니다."
+    public static let unavailableText = AppErrorCode.sessionRead.message("활성 세션을 불러올 수 없습니다.")
     /// Bounded refresh cadence while the account popover remains mounted.
     /// Loads are sequential, so a slow provider read cannot overlap another.
     public static let activityRefreshInterval: TimeInterval = 5
@@ -143,6 +143,14 @@ public struct CLIActivitySection: View {
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.isEmpty || normalized == "Agent" ? "에이전트" : String(normalized.prefix(80))
+    }
+
+    /// 안전한 모델·추론 등급만 이름 옆 표시 문자열로 구성
+    public static func modelMetadataText(model: String?, reasoningEffort: String?) -> String? {
+        let model = SessionActivityMetadataSanitizer.modelIdentifier(model)
+        let effort = SessionActivityMetadataSanitizer.reasoningEffort(reasoningEffort)
+        let values = [model, effort].compactMap { $0 }
+        return values.isEmpty ? nil : values.joined(separator: " ")
     }
 
     /// Small async seam used by tests with fake snapshots. SwiftUI's `.task`
@@ -289,7 +297,8 @@ public struct CLIActivitySection: View {
         _ item: SessionActivityPresentationItem,
         isExpanded: Bool
     ) -> some View {
-        Button {
+        let metadata = Self.modelMetadataText(model: item.session.model, reasoningEffort: item.session.reasoningEffort)
+        return Button {
             toggleSession(item.id)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -304,32 +313,36 @@ public struct CLIActivitySection: View {
                     .frame(width: 7, height: 7)
                     .accessibilityHidden(true)
 
-                Text(Self.sessionTitle(item.title))
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(1)
-
-                Text(Self.shortSessionID(item.session.threadID))
-                    .font(.caption2.monospaced())
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(Self.sessionTitle(item.title))
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let metadata {
+                            Text("(\(metadata))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    HStack(spacing: 4) {
+                        Text(Self.shortSessionID(item.session.threadID))
+                            .font(.caption2.monospaced())
+                            .help(item.session.threadID)
+                        Spacer(minLength: 4)
+                        Text(Self.mainStatusText(for: item))
+                        if let time = Self.activityTimeText(for: item.lastActivityAt) {
+                            Text("·").foregroundStyle(.secondary)
+                            Text(time)
+                        }
+                    }
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .help(item.session.threadID)
-
-                Spacer(minLength: 8)
-
-                HStack(spacing: 4) {
-                    Text(Self.mainStatusText(for: item))
-                    if let time = Self.activityTimeText(for: item.lastActivityAt) {
-                        Text("·")
-                            .foregroundStyle(.secondary)
-                        Text(time)
-                    }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
@@ -354,23 +367,35 @@ public struct CLIActivitySection: View {
     ) -> some View {
         let displayName = Self.displayName(for: agent)
         let taskName = Self.taskName(for: agent)
+        let metadata = Self.modelMetadataText(model: agent.model, reasoningEffort: agent.reasoningEffort)
+        let accessibilityLabels = [displayName] + (metadata.map { [$0] } ?? []) + [taskName]
 
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
+        HStack(alignment: .top, spacing: 7) {
             Circle()
                 .fill(Self.statusColor(for: agent.status))
                 .frame(width: 7, height: 7)
                 .accessibilityHidden(true)
 
-            Text(displayName)
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(displayName)
+                        .font(.caption.weight(.semibold))
+                    if let metadata {
+                        Text("(\(metadata))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
 
-            if taskName != displayName {
-                Text(taskName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                if taskName != displayName {
+                    Text(taskName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                }
             }
 
             Spacer(minLength: 4)
@@ -388,7 +413,7 @@ public struct CLIActivitySection: View {
                 .accessibilityHidden(true)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(displayName), \(taskName)")
+        .accessibilityLabel(accessibilityLabels.joined(separator: ", "))
         .accessibilityValue(agent.status.displayText)
     }
 
@@ -405,7 +430,12 @@ public struct CLIActivitySection: View {
     }
 
     private func sessionAccessibilityLabel(for item: SessionActivityPresentationItem) -> String {
-        var values = [Self.sessionTitle(item.title), Self.shortSessionID(item.session.threadID), Self.mainStatusText(for: item)]
+        var values = [Self.sessionTitle(item.title)]
+        if let metadata = Self.modelMetadataText(model: item.session.model, reasoningEffort: item.session.reasoningEffort) {
+            values.append(metadata)
+        }
+        values.append(Self.shortSessionID(item.session.threadID))
+        values.append(Self.mainStatusText(for: item))
         if let time = Self.activityTimeText(for: item.lastActivityAt) {
             values.append(time)
         }
