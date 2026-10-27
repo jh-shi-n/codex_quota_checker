@@ -5,7 +5,7 @@ import Foundation
 
 /// 앱 번들과 소스 실행의 일관된 버전 표시
 public enum AppVersion {
-    public static let fallback = "0.3.3"
+    public static let fallback = "0.3.4"
     public static var current: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? fallback
     }
