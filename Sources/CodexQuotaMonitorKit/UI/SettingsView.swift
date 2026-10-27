@@ -119,6 +119,7 @@ public struct SettingsView: View {
     @Binding public var accountDisplayNames: [String: String]
     @Binding public var launchAtLogin: Bool
     private let launchAtLoginService: LaunchAtLoginService?
+    @Binding public var notchDisplayStyle: NotchDisplayStyle
     @Binding public var showAccountLabels: Bool
     @Binding public var activityNotificationDurationSeconds: Int
     /// 화면에 표시할 활성 계정 ID 목록
@@ -148,6 +149,7 @@ public struct SettingsView: View {
         accountPaths: Binding<[String]>,
         launchAtLogin: Binding<Bool>,
         launchAtLoginService: LaunchAtLoginService? = nil,
+        notchDisplayStyle: Binding<NotchDisplayStyle> = .constant(.ring),
         showAccountLabels: Binding<Bool> = .constant(false),
         activityNotificationDurationSeconds: Binding<Int> = .constant(
             PreferencesStore.defaultActivityNotificationDurationSeconds
@@ -174,6 +176,7 @@ public struct SettingsView: View {
         self._accountPaths = accountPaths
         self._launchAtLogin = launchAtLogin
         self.launchAtLoginService = launchAtLoginService
+        self._notchDisplayStyle = notchDisplayStyle
         self._showAccountLabels = showAccountLabels
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
@@ -207,6 +210,7 @@ public struct SettingsView: View {
         account4Path: Binding<String>,
         launchAtLogin: Binding<Bool>,
         launchAtLoginService: LaunchAtLoginService? = nil,
+        notchDisplayStyle: Binding<NotchDisplayStyle> = .constant(.ring),
         showAccountLabels: Binding<Bool> = .constant(false),
         activityNotificationDurationSeconds: Binding<Int> = .constant(
             PreferencesStore.defaultActivityNotificationDurationSeconds
@@ -244,6 +248,7 @@ public struct SettingsView: View {
         )
         self._launchAtLogin = launchAtLogin
         self.launchAtLoginService = launchAtLoginService
+        self._notchDisplayStyle = notchDisplayStyle
         self._showAccountLabels = showAccountLabels
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
@@ -275,6 +280,7 @@ public struct SettingsView: View {
     public var body: some View {
         ScrollView {
             Form {
+                NotchDisplayStyleSettingsSection(selection: $notchDisplayStyle)
                 Section(Self.refreshSectionTitle) {
                     Toggle("주기 조회", isOn: $automaticRefreshEnabled)
                     Text("앱 시작 시 확인과 수동 새로고침은 주기 조회를 꺼도 실행됩니다.")

@@ -20,6 +20,8 @@ public struct AppPreferencesPayload: Codable, Equatable, Sendable {
     /// 이전 설정의 필드 누락은 자동 Ping 미사용으로 처리
     public var automaticResetPingEnabled: Bool? = nil
     public var automaticRefreshEnabled: Bool? = nil
+    /// 누락·알 수 없는 스타일의 링 기본값 호환을 위한 원시 문자열
+    public var notchDisplayStyle: String? = nil
 
     /// 기존 정규화 경로와 동일한 키를 사용하는 설정 로드 어댑터
     @MainActor var preferenceValues: [String: Any] {
@@ -35,6 +37,7 @@ public struct AppPreferencesPayload: Codable, Equatable, Sendable {
             PreferencesStore.Keys.automaticRefreshEnabled: automaticRefreshEnabled ?? true,
             PreferencesStore.Keys.activityNotificationDurationSeconds: activityNotificationDurationSeconds,
             PreferencesStore.Keys.showAccountLabels: showAccountLabels,
+            PreferencesStore.Keys.notchDisplayStyle: notchDisplayStyle ?? "ring",
             PreferencesStore.Keys.launchAtLogin: launchAtLogin,
         ]
     }

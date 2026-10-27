@@ -19,6 +19,7 @@ public final class PreferencesStore: ObservableObject {
         public static let accountDisplayOrder = "CodexQuotaMonitor.accountDisplayOrder"
         public static let accountDisplayNames = "CodexQuotaMonitor.accountDisplayNames"
         public static let launchAtLogin = "CodexQuotaMonitor.launchAtLogin"
+        public static let notchDisplayStyle = "CodexQuotaMonitor.notchDisplayStyle"
         public static let showAccountLabels = "CodexQuotaMonitor.showAccountLabels"
         public static let activityNotificationDurationSeconds = "CodexQuotaMonitor.activityNotificationDurationSeconds"
         public static let lastSuccessfulQuotaSnapshots = "CodexQuotaMonitor.lastSuccessfulQuotaSnapshots"
@@ -100,6 +101,7 @@ public final class PreferencesStore: ObservableObject {
     /// C1–C4 슬롯에만 연결한 사용자 표시 이름
     @Published public private(set) var accountDisplayNames: [String: String]
     @Published public private(set) var launchAtLogin: Bool
+    @Published public private(set) var notchDisplayStyle: NotchDisplayStyle
     @Published public private(set) var showAccountLabels: Bool
     @Published public private(set) var activityNotificationDurationSeconds: Int
     @Published public private(set) var persistenceError: String?
@@ -189,7 +191,7 @@ public final class PreferencesStore: ObservableObject {
         if let bundle {
             for key in [Keys.accountPaths, Keys.enabledAccountIDs, Keys.accountDisplayOrder, Keys.accountDisplayNames,
                         Keys.refreshIntervalMinutes, Keys.resetReminderMinutes, Keys.automaticResetPingEnabled, Keys.automaticRefreshEnabled, Keys.launchAtLogin,
-                        Keys.showAccountLabels, Keys.activityNotificationDurationSeconds] {
+                        Keys.showAccountLabels, Keys.notchDisplayStyle, Keys.activityNotificationDurationSeconds] {
                 userDefaults.removeObject(forKey: key)
             }
             self.hasRegisteredAccount = bundle.hasRegisteredAccount
@@ -255,6 +257,7 @@ public final class PreferencesStore: ObservableObject {
         let rawShowAccountLabels = readSetting(Keys.showAccountLabels)
         let persistedShowAccountLabels = rawShowAccountLabels as? Bool
         self.showAccountLabels = persistedShowAccountLabels ?? false
+        self.notchDisplayStyle = NotchDisplayStyle(rawValue: readSetting(Keys.notchDisplayStyle) as? String ?? "") ?? .ring
         let rawActivityDuration = readSetting(Keys.activityNotificationDurationSeconds)
         let persistedActivityDuration = rawActivityDuration as? Int
         self.activityNotificationDurationSeconds = Self.normalizedActivityNotificationDurationSeconds(
@@ -620,6 +623,13 @@ public final class PreferencesStore: ObservableObject {
         persist()
     }
 
+    /// 노치 디자인 저장 및 저장 실패 시 기존 설정 복원
+    public func updateNotchDisplayStyle(_ style: NotchDisplayStyle) {
+        guard !settingsLoadFailed else { return }
+        notchDisplayStyle = style
+        persist()
+    }
+
     public func updateShowAccountLabels(_ enabled: Bool) {
         guard !settingsLoadFailed else { return }
         showAccountLabels = enabled
@@ -670,7 +680,7 @@ public final class PreferencesStore: ObservableObject {
             activityNotificationDurationSeconds: activityNotificationDurationSeconds,
             showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin,
             accountDisplayNames: accountDisplayNames, tokenUsageOptions: tokenUsageOptions,
-            automaticResetPingEnabled: automaticResetPingEnabled, automaticRefreshEnabled: automaticRefreshEnabled)
+            automaticResetPingEnabled: automaticResetPingEnabled, automaticRefreshEnabled: automaticRefreshEnabled, notchDisplayStyle: notchDisplayStyle.rawValue)
     }
 
     /// 인코딩 실패 시 직전 정상 설정 복원
@@ -685,6 +695,7 @@ public final class PreferencesStore: ObservableObject {
         automaticResetPingEnabled = value.automaticResetPingEnabled ?? false
         automaticRefreshEnabled = value.automaticRefreshEnabled ?? true
         activityNotificationDurationSeconds = value.activityNotificationDurationSeconds
+        notchDisplayStyle = NotchDisplayStyle(rawValue: value.notchDisplayStyle ?? "") ?? .ring
         showAccountLabels = value.showAccountLabels
         launchAtLogin = value.launchAtLogin
     }
