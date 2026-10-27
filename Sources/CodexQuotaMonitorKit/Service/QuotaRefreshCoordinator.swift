@@ -37,9 +37,9 @@ public final class QuotaRefreshCoordinator {
         guard await store.refresh(accountID: accountID, forceFresh: true), !Task.isCancelled,
               let first = store.state(for: accountID), first.status == .normal,
               let firstUpdated = first.lastUpdated, abs(firstUpdated.timeIntervalSince(now())) <= 30 else { return }
-        let expired = previous?.lastUpdated == nil || (previous?.primaryResetAt.map { !$0.timeIntervalSince1970.isFinite || $0 <= now() } ?? true)
-        let changed = Self.hasLargeChange(previous: previous, current: first)
-        if changed, var baseline = previous {
+        let scheduleWindows = Self.scheduleRecheckWindows(previous: previous, current: first, now: now())
+        let changedWindows = Self.largeChangeWindows(previous: previous, current: first)
+        if !changedWindows.isEmpty, var baseline = previous {
             baseline.status = .normal
             for change in QuotaResetChange.detect(previous: baseline, current: first, now: now()) {
                 DiagnosticLogContext.record(.quotaResetDetected, accountID: accountID, fields: [
@@ -48,34 +48,81 @@ public final class QuotaRefreshCoordinator {
                 ])
             }
         }
-        if expired || changed || (startup && previous?.acceptsIdentity(of: first) == false) {
-            store.beginResetVerification(expected: first)
-            do { try await sleep(3) } catch { store.endResetVerification(expected: first); return }
+        var verificationWindows = scheduleWindows
+        for window in changedWindows where !verificationWindows.contains(window) { verificationWindows.append(window) }
+        if startup && previous?.acceptsIdentity(of: first) == false {
+            if first.primaryResetAt.map({ $0.timeIntervalSince1970.isFinite }) == true,
+               !verificationWindows.contains(.primary) { verificationWindows.append(.primary) }
+            if first.secondaryResetAt.map({ $0.timeIntervalSince1970.isFinite }) == true,
+               !verificationWindows.contains(.secondary) { verificationWindows.append(.secondary) }
+        }
+        if !verificationWindows.isEmpty {
+            store.beginResetVerification(expected: first, windows: verificationWindows)
+            do { try await sleep(3) } catch { store.endResetVerification(expected: first, windows: verificationWindows); return }
             guard !Task.isCancelled, let active = store.state(for: accountID),
                   active.lastUpdated == first.lastUpdated, active.acceptsIdentity(of: first),
                   await store.refresh(accountID: accountID, forceFresh: true),
                   let second = store.state(for: accountID),
                   second.lastUpdated.map({ $0 > firstUpdated }) == true else {
-                store.endResetVerification(expected: first)
+                store.endResetVerification(expected: first, windows: verificationWindows)
                 return
             }
-            store.finishResetVerification(expected: second, comparedTo: first)
+            store.finishResetVerification(expected: second, comparedTo: first, windows: verificationWindows)
         } else if startup, let previous {
             store.finishResetVerification(expected: first, comparedTo: previous)
         }
     }
 
+    /// 현재 응답에 제공된 한도만 대상으로 신규·만료 일정을 재확인
+    public static func needsScheduleRecheck(previous: AccountState?, current: AccountState, now: Date) -> Bool {
+        !scheduleRecheckWindows(previous: previous, current: current, now: now).isEmpty
+    }
+
+    /// 신규·만료 조건에 해당하는 재확인 한도만 반환
+    public static func scheduleRecheckWindows(
+        previous: AccountState?, current: AccountState, now: Date
+    ) -> [EarlyQuotaReset.Window] {
+        let providedSchedules = [current.primaryResetAt, current.secondaryResetAt]
+            .contains { $0.map { $0.timeIntervalSince1970.isFinite } == true }
+        if providedSchedules, previous?.lastUpdated == nil {
+            var windows: [EarlyQuotaReset.Window] = []
+            if current.primaryResetAt.map({ $0.timeIntervalSince1970.isFinite }) == true { windows.append(.primary) }
+            if current.secondaryResetAt.map({ $0.timeIntervalSince1970.isFinite }) == true { windows.append(.secondary) }
+            return windows
+        }
+        var windows: [EarlyQuotaReset.Window] = []
+        for (window, old, fresh) in [
+            (EarlyQuotaReset.Window.primary, previous?.primaryResetAt, current.primaryResetAt),
+            (EarlyQuotaReset.Window.secondary, previous?.secondaryResetAt, current.secondaryResetAt)
+        ] {
+            guard let fresh, fresh.timeIntervalSince1970.isFinite else { continue }
+            guard let old, old.timeIntervalSince1970.isFinite, old > now else {
+                windows.append(window)
+                continue
+            }
+        }
+        return windows
+    }
+
     /// 조회 경과에 비례한 이동을 제외한 1분 초과의 갑작스러운 일정 변경 판별
     public static func hasLargeChange(previous: AccountState?, current: AccountState) -> Bool {
-        guard let previous, previous.acceptsIdentity(of: current) else { return false }
+        !largeChangeWindows(previous: previous, current: current).isEmpty
+    }
+
+    /// 1분 초과의 갑작스러운 변경에 해당하는 한도 반환
+    public static func largeChangeWindows(previous: AccountState?, current: AccountState) -> [EarlyQuotaReset.Window] {
+        guard let previous, previous.acceptsIdentity(of: current) else { return [] }
         let elapsed = current.lastUpdated.flatMap { latest in previous.lastUpdated.map { latest.timeIntervalSince($0) } }
-        for (old, new) in [(previous.primaryResetAt, current.primaryResetAt),
-                           (previous.secondaryResetAt, current.secondaryResetAt)] {
+        var windows: [EarlyQuotaReset.Window] = []
+        for (window, old, new) in [
+            (EarlyQuotaReset.Window.primary, previous.primaryResetAt, current.primaryResetAt),
+            (EarlyQuotaReset.Window.secondary, previous.secondaryResetAt, current.secondaryResetAt)
+        ] {
             guard let old, let new else { continue }
             let delta = new.timeIntervalSince(old)
-            if abs(delta) > 60 && (elapsed.map({ abs(delta - $0) > 60 }) ?? true) { return true }
+            if abs(delta) > 60 && (elapsed.map({ abs(delta - $0) > 60 }) ?? true) { windows.append(window) }
         }
-        return false
+        return windows
     }
 }
 

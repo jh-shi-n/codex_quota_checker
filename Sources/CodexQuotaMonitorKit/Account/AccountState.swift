@@ -7,7 +7,16 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     public var configurationGeneration = 0
     /// 최초 조회 전 대기와 실제 로딩의 비영속 구분
     public var isWaitingForRefresh = false
-    public var isResetVerificationPending = false
+    /// 한도별 재확인 상태; 계정 전체 상태는 통합 속성으로 제공
+    public var isPrimaryResetVerificationPending = false
+    public var isSecondaryResetVerificationPending = false
+    public var isResetVerificationPending: Bool {
+        get { isPrimaryResetVerificationPending || isSecondaryResetVerificationPending }
+        set {
+            isPrimaryResetVerificationPending = newValue
+            isSecondaryResetVerificationPending = newValue
+        }
+    }
     public var isRefreshing: Bool { status == .loading && !isWaitingForRefresh }
     /// 서버의 통합 리셋권 잔여 개수와 선택적 소멸일 목록
     public var resetCredits: RateLimitResetCredits?

@@ -9,6 +9,13 @@ final class SharedTaskWaiters: @unchecked Sendable {
     private var closing = false
     private let cancel: @Sendable () -> Void
 
+    /// 남은 소비자 조회
+    var hasWaiters: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !waiters.isEmpty
+    }
+
     /// 마지막 소비자 이탈 시 실행할 취소 동작 지정
     init(cancel: @escaping @Sendable () -> Void) { self.cancel = cancel }
 

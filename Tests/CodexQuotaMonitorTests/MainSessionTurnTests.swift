@@ -9,6 +9,23 @@ import XCTest
 /// 명시적 메인 턴 이벤트만 알림으로 이어지는지 확인
 @MainActor
 final class MainSessionTurnTests: XCTestCase {
+    /// JSONL 상태 재구성에서 SQLite 모델 메타데이터 보존 검증
+    func testMainTurnReconstructionPreservesModelMetadata() async throws {
+        let (home, _) = try fixture(contents: event("task_started", turn: "active"))
+        defer { try? FileManager.default.removeItem(at: home) }
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(home.appendingPathComponent("state_5.sqlite").path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(sqlite3_exec(database,
+            "UPDATE threads SET model='gpt-6.1-sol', reasoning_effort='medium' WHERE id='root'", nil, nil, nil), SQLITE_OK)
+
+        let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_000) })
+        let snapshot = await provider.snapshot(accountID: "C1", home: home)
+        XCTAssertEqual(snapshot.sessions.first?.status, .working)
+        XCTAssertEqual(snapshot.sessions.first?.model, "GPT-6.1-Sol")
+        XCTAssertEqual(snapshot.sessions.first?.reasoningEffort, "medium")
+    }
+
     /// 답변 도중 모델 용량 초과로 끝난 턴의 오류 표시·1회 알림과 다음 턴 정상 복구 검증
     func testCapacityFailureIsReportedAsErrorAndNextTurnCanComplete() async throws {
         let (home, log) = try fixture(contents: event("task_started", turn: "failed-turn"))
@@ -252,9 +269,10 @@ final class MainSessionTurnTests: XCTestCase {
         let path = log.path.replacingOccurrences(of: "'", with: "''")
         let sql = """
             CREATE TABLE threads (id TEXT PRIMARY KEY, updated_at REAL, archived INTEGER, name TEXT,
-                title TEXT, agent_role TEXT, agent_nickname TEXT, agent_path TEXT, thread_source TEXT, rollout_path TEXT);
+                title TEXT, agent_role TEXT, agent_nickname TEXT, agent_path TEXT, thread_source TEXT,
+                model TEXT, reasoning_effort TEXT, rollout_path TEXT);
             CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT, status TEXT);
-            INSERT INTO threads VALUES ('root', 1999999, 0, '메인 세션', NULL, NULL, NULL, NULL, 'cli', '\(path)');
+            INSERT INTO threads VALUES ('root', 1999999, 0, '메인 세션', NULL, NULL, NULL, NULL, 'cli', NULL, NULL, '\(path)');
             """
         XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
         return (home, log)

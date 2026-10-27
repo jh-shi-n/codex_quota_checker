@@ -116,6 +116,99 @@ final class SessionActivityProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.sessions.first?.taskName, "Main task")
     }
 
+    /// 메인·하위 세션의 서로 다른 모델과 추론 등급 반영 검증
+    func testModelMetadataProjectsIndependentlyForMainAndAgent() async throws {
+        let home = try makeTemporaryHome()
+        try makeDatabase(at: home, threads: [
+            .init(id: "root", updatedAt: 1_999_900, archived: false, name: "Main", role: nil, nickname: nil,
+                model: "gpt-6.1-sol", reasoningEffort: "medium"),
+            .init(id: "agent", updatedAt: 1_999_901, archived: false, name: "Review", role: "Reviewer", nickname: "R",
+                source: "subagent", model: "gpt-6-luna", reasoningEffort: "high"),
+        ], edges: [.init(parent: "root", child: "agent", status: "running")])
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_000) })
+        let snapshot = await provider.snapshot(accountID: "C1", home: home)
+        let session = try XCTUnwrap(snapshot.sessions.first)
+        let agent = try XCTUnwrap(session.agents.first)
+        XCTAssertEqual(session.model, "GPT-6.1-Sol")
+        XCTAssertEqual(session.reasoningEffort, "medium")
+        XCTAssertEqual(agent.model, "GPT-6-Luna")
+        XCTAssertEqual(agent.reasoningEffort, "high")
+    }
+
+    /// 구형 threads 스키마와 null·불완전 메타데이터의 안전한 기본 처리 검증
+    func testOldSchemaAndInvalidModelMetadataRemainOptional() async throws {
+        let oldHome = try makeTemporaryHome()
+        try makeRawDatabase(at: oldHome, statements: [
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, updated_at REAL, archived INTEGER, name TEXT, title TEXT, agent_role TEXT, agent_nickname TEXT, agent_path TEXT, thread_source TEXT)",
+            "CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT, status TEXT)",
+            "INSERT INTO threads VALUES ('old-root', 1999900, 0, 'Old', NULL, NULL, NULL, NULL, 'cli')",
+        ])
+        defer { try? FileManager.default.removeItem(at: oldHome) }
+        let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_000) })
+        let oldSnapshot = await provider.snapshot(accountID: "C1", home: oldHome)
+        XCTAssertNil(oldSnapshot.sessions.first?.model)
+        XCTAssertNil(oldSnapshot.sessions.first?.reasoningEffort)
+
+        for schema in ["model TEXT", "reasoning_effort TEXT"] {
+            let partialHome = try makeTemporaryHome()
+            let field = schema.hasPrefix("model") ? "model" : "reasoning_effort"
+            let value = field == "model" ? "'gpt-6.1-sol'" : "'high'"
+            try makeRawDatabase(at: partialHome, statements: [
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, updated_at REAL, archived INTEGER, name TEXT, title TEXT, agent_role TEXT, agent_nickname TEXT, agent_path TEXT, thread_source TEXT, \(schema))",
+                "CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT, status TEXT)",
+                "INSERT INTO threads VALUES ('partial', 1999900, 0, 'Partial', NULL, NULL, NULL, NULL, 'cli', \(value))",
+            ])
+            let partial = await provider.snapshot(accountID: "C1", home: partialHome).sessions.first
+            XCTAssertEqual(partial?.model, field == "model" ? "GPT-6.1-Sol" : nil)
+            XCTAssertEqual(partial?.reasoningEffort, field == "reasoning_effort" ? "high" : nil)
+            try? FileManager.default.removeItem(at: partialHome)
+        }
+
+        let currentHome = try makeTemporaryHome()
+        try makeDatabase(at: currentHome, threads: [
+            .init(id: "invalid-root", updatedAt: 1_999_900, archived: false, name: "Invalid", role: nil, nickname: nil,
+                model: "gpt-6.1-sol/secret", reasoningEffort: "secret"),
+        ], edges: [])
+        defer { try? FileManager.default.removeItem(at: currentHome) }
+        let invalidSnapshot = await provider.snapshot(accountID: "C2", home: currentHome)
+        XCTAssertNil(invalidSnapshot.sessions.first?.model)
+        XCTAssertNil(invalidSnapshot.sessions.first?.reasoningEffort)
+    }
+
+    /// 새 snapshot에서 변경된 모델과 계정별 DB 경로 분리 검증
+    func testModelRefreshAndAccountHomesRemainIsolated() async throws {
+        let firstHome = try makeTemporaryHome()
+        let secondHome = try makeTemporaryHome()
+        try makeDatabase(at: firstHome, threads: [
+            .init(id: "first", updatedAt: 1_999_900, archived: false, name: "First", role: nil, nickname: nil,
+                model: "gpt-6-sol", reasoningEffort: "low"),
+        ], edges: [])
+        try makeDatabase(at: secondHome, threads: [
+            .init(id: "second", updatedAt: 1_999_900, archived: false, name: "Second", role: nil, nickname: nil,
+                model: "gpt-6-astra", reasoningEffort: "high"),
+        ], edges: [])
+        defer {
+            try? FileManager.default.removeItem(at: firstHome)
+            try? FileManager.default.removeItem(at: secondHome)
+        }
+        let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_000) })
+        let first = await provider.snapshot(accountID: "C1", home: firstHome)
+        let second = await provider.snapshot(accountID: "C2", home: secondHome)
+        XCTAssertEqual(first.sessions.first?.model, "GPT-6-Sol")
+        XCTAssertEqual(second.sessions.first?.model, "GPT-6-Astra")
+        XCTAssertEqual(first.sessions.first?.reasoningEffort, "low")
+        XCTAssertEqual(second.sessions.first?.reasoningEffort, "high")
+
+        try execute("UPDATE threads SET model='gpt-6.1-sol', reasoning_effort='medium' WHERE id='first'", at: firstHome)
+        let refreshed = await provider.snapshot(accountID: "C1", home: firstHome)
+        XCTAssertEqual(refreshed.sessions.first?.model, "GPT-6.1-Sol")
+        XCTAssertEqual(refreshed.sessions.first?.reasoningEffort, "medium")
+        let secondAfterRefresh = await provider.snapshot(accountID: "C2", home: secondHome)
+        XCTAssertEqual(secondAfterRefresh.sessions.first?.model, "GPT-6-Astra")
+    }
+
     func testThreadSourceNormalizationRecognizesOnlyLocalCliAndAppValues() {
         XCTAssertEqual(SessionActivitySource.normalize(raw: "cli"), .cli)
         XCTAssertEqual(SessionActivitySource.normalize(raw: "user"), .cli)
@@ -125,6 +218,18 @@ final class SessionActivityProviderTests: XCTestCase {
         XCTAssertNil(SessionActivitySource.normalize(raw: "browser"))
         XCTAssertNil(SessionActivitySource.normalize(raw: "subagent"))
         XCTAssertNil(SessionActivitySource.normalize(raw: "future"))
+    }
+
+    /// 세션 제목 뒤 모델·추론 등급 표기와 안전 필터 검증
+    @MainActor
+    func testModelSuffixFormattingRejectsUnsafeOrUnknownMetadata() {
+        XCTAssertEqual(CLIActivitySection.modelMetadataText(model: "gpt-6.1-sol", reasoningEffort: "MEDIUM"),
+            "GPT-6.1-Sol medium")
+        XCTAssertNil(CLIActivitySection.modelMetadataText(model: nil, reasoningEffort: nil))
+        XCTAssertEqual(CLIActivitySection.modelMetadataText(model: "bad/model", reasoningEffort: "ultra"), "ultra")
+        XCTAssertEqual(CLIActivitySection.modelMetadataText(model: nil, reasoningEffort: "MAX"), "max")
+        XCTAssertEqual(CLIActivitySection.modelMetadataText(model: "gpt-6.1-sol", reasoningEffort: "secret"), "GPT-6.1-Sol")
+        XCTAssertNil(CLIActivitySection.modelMetadataText(model: String(repeating: "a", count: 65), reasoningEffort: nil))
     }
 
     func testNewestRecentRootWinsAndIncludesAllDescendants() async throws {
@@ -792,6 +897,7 @@ final class SessionActivityProviderTests: XCTestCase {
 
         XCTAssertEqual(SQLiteSessionActivityProvider.allowedThreadColumns, [
             "id", "updated_at", "archived", "name", "title", "agent_role", "agent_nickname", "agent_path", "thread_source",
+            "model", "reasoning_effort",
         ])
         XCTAssertEqual(SQLiteSessionActivityProvider.allowedEdgeColumns, [
             "parent_thread_id", "child_thread_id", "status",
@@ -831,11 +937,11 @@ final class SessionActivityProviderTests: XCTestCase {
         edges: [EdgeFixture]
     ) throws {
         var statements = [
-            "CREATE TABLE threads (id TEXT PRIMARY KEY, updated_at REAL, archived INTEGER, name TEXT, title TEXT, agent_role TEXT, agent_nickname TEXT, agent_path TEXT, thread_source TEXT)",
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, updated_at REAL, archived INTEGER, name TEXT, title TEXT, agent_role TEXT, agent_nickname TEXT, agent_path TEXT, thread_source TEXT, model TEXT, reasoning_effort TEXT)",
             "CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT, status TEXT)",
         ]
         statements.append(contentsOf: threads.map { thread in
-            "INSERT INTO threads VALUES (\(literal(thread.id)), \(thread.updatedAt), \(thread.archived ? 1 : 0), \(literal(thread.name)), \(literal(thread.title)), \(literal(thread.role)), \(literal(thread.nickname)), \(literal(thread.agentPath)), \(literal(thread.source)))"
+            "INSERT INTO threads VALUES (\(literal(thread.id)), \(thread.updatedAt), \(thread.archived ? 1 : 0), \(literal(thread.name)), \(literal(thread.title)), \(literal(thread.role)), \(literal(thread.nickname)), \(literal(thread.agentPath)), \(literal(thread.source)), \(literal(thread.model)), \(literal(thread.reasoningEffort)))"
         })
         statements.append(contentsOf: edges.map { edge in
             "INSERT INTO thread_spawn_edges VALUES (\(literal(edge.parent)), \(literal(edge.child)), \(literal(edge.status)))"
@@ -866,6 +972,15 @@ final class SessionActivityProviderTests: XCTestCase {
         guard let value else { return "NULL" }
         return "'\(value.replacingOccurrences(of: "'", with: "''"))'"
     }
+
+    /// 격리 데이터베이스에 단일 메타데이터 갱신 실행
+    private func execute(_ sql: String, at home: URL) throws {
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(home.appendingPathComponent("state_5.sqlite").path,
+            &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK, sql)
+    }
 }
 
 private struct ThreadFixture {
@@ -878,6 +993,8 @@ private struct ThreadFixture {
     let nickname: String?
     let agentPath: String?
     let source: String?
+    let model: String?
+    let reasoningEffort: String?
 
     init(
         id: String,
@@ -888,7 +1005,9 @@ private struct ThreadFixture {
         role: String?,
         nickname: String?,
         agentPath: String? = nil,
-        source: String? = "cli"
+        source: String? = "cli",
+        model: String? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.id = id
         self.updatedAt = updatedAt
@@ -899,6 +1018,8 @@ private struct ThreadFixture {
         self.nickname = nickname
         self.agentPath = agentPath
         self.source = source
+        self.model = model
+        self.reasoningEffort = reasoningEffort
     }
 }
 
