@@ -10,8 +10,10 @@ public enum QuotaClusterMetrics {
     /// Black-only extension toward the physical camera/notch gap.
     public static let notchBridgeWidth: CGFloat = 8
 
+    /// 모든 디자인에 동일한 링 한 칸과 계정 간격 적용
     public static func footprint(
         itemCount: Int,
+        style: NotchDisplayStyle = .ring,
         diameter: CGFloat,
         spacing: CGFloat = QuotaDonutMetrics.accountSpacing
     ) -> CGSize {
@@ -28,25 +30,28 @@ public enum QuotaClusterMetrics {
     /// hover scale to remain inside the black content bounds.
     public static func visualInset(
         forDiameter diameter: CGFloat,
-        hoverScale: CGFloat = QuotaDonutMetrics.hoverScale
+        hoverScale: CGFloat = QuotaDonutMetrics.hoverScale,
+        style: NotchDisplayStyle = .ring
     ) -> CGFloat {
         let safeDiameter = diameter.isFinite ? max(0, diameter) : 0
         let safeScale = hoverScale.isFinite ? max(1, hoverScale) : 1
         return max(
             0,
-            (safeDiameter * (safeScale - 1) + QuotaDonutMetrics.ringWidth * safeScale) / 2
+            (safeDiameter * (safeScale - 1)
+                + QuotaDonutMetrics.ringWidth * safeScale) / 2
         )
     }
 
     public static func visualFootprint(
         itemCount: Int,
+        style: NotchDisplayStyle = .ring,
         diameter: CGFloat,
         spacing: CGFloat = QuotaDonutMetrics.accountSpacing,
         hoverScale: CGFloat = QuotaDonutMetrics.hoverScale
     ) -> CGSize {
-        let content = footprint(itemCount: itemCount, diameter: diameter, spacing: spacing)
+        let content = footprint(itemCount: itemCount, style: style, diameter: diameter, spacing: spacing)
         guard itemCount > 0 else { return .zero }
-        let inset = visualInset(forDiameter: diameter, hoverScale: hoverScale)
+        let inset = visualInset(forDiameter: diameter, hoverScale: hoverScale, style: style)
         let safeMargin = containmentMargin
         return CGSize(
             width: content.width + (inset + safeMargin) * 2,
@@ -153,6 +158,7 @@ public struct QuotaClusterView: View {
     public let side: NotchSide
     public let menuBarHeight: CGFloat
     public let diameterOverride: CGFloat?
+    public let displayStyle: NotchDisplayStyle
     public let showAccountLabels: Bool
     public let onRefresh: (AccountState) -> Void
     public let onSettings: () -> Void
@@ -182,6 +188,7 @@ public struct QuotaClusterView: View {
         side: NotchSide,
         menuBarHeight: CGFloat = 24,
         diameterOverride: CGFloat? = nil,
+        displayStyle: NotchDisplayStyle = .ring,
         showAccountLabels: Bool = false,
         onRefresh: @escaping (AccountState) -> Void = { _ in },
         onSettings: @escaping () -> Void = {},
@@ -209,6 +216,7 @@ public struct QuotaClusterView: View {
         self.side = side
         self.menuBarHeight = menuBarHeight
         self.diameterOverride = diameterOverride
+        self.displayStyle = displayStyle
         self.showAccountLabels = showAccountLabels
         self.onRefresh = onRefresh
         self.onSettings = onSettings
@@ -255,6 +263,7 @@ public struct QuotaClusterView: View {
                         account: account,
                         menuBarHeight: menuBarHeight,
                         diameterOverride: diameterOverride,
+                        displayStyle: displayStyle,
                         showAccountLabels: showAccountLabels,
                         onRefresh: { onRefresh(account) },
                         onSettings: onSettings,
@@ -306,6 +315,7 @@ public struct QuotaClusterView: View {
         let requestedDiameter = diameterOverride ?? QuotaDonutMetrics.diameter(forMenuBarHeight: menuBarHeight)
         return QuotaClusterMetrics.visualFootprint(
             itemCount: accounts.count,
+            style: displayStyle,
             diameter: requestedDiameter,
             spacing: QuotaDonutMetrics.accountSpacing
         ).width

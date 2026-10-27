@@ -90,6 +90,7 @@ public struct NotchLayout: Equatable, Sendable {
     public func contentFrame(
         side: NotchSide,
         itemCount: Int,
+        style: NotchDisplayStyle = .ring,
         diameter: CGFloat = QuotaDonutMetrics.maximumDiameter,
         spacing: CGFloat = QuotaDonutMetrics.accountSpacing
     ) -> CGRect {
@@ -100,11 +101,13 @@ public struct NotchLayout: Equatable, Sendable {
         let safeDiameter = resolvedDiameter(
             side: side,
             itemCount: itemCount,
+            style: style,
             diameter: diameter,
             spacing: safeSpacing
         )
         let visualFootprint = QuotaClusterMetrics.visualFootprint(
             itemCount: itemCount,
+            style: style,
             diameter: safeDiameter,
             spacing: safeSpacing
         )
@@ -132,6 +135,7 @@ public struct NotchLayout: Equatable, Sendable {
     public func panelFrame(
         side: NotchSide,
         itemCount: Int,
+        style: NotchDisplayStyle = .ring,
         diameter: CGFloat = QuotaDonutMetrics.maximumDiameter,
         spacing: CGFloat = QuotaDonutMetrics.accountSpacing,
         notchBridgeWidth: CGFloat = QuotaClusterMetrics.notchBridgeWidth,
@@ -140,6 +144,7 @@ public struct NotchLayout: Equatable, Sendable {
         let content = contentFrame(
             side: side,
             itemCount: itemCount,
+            style: style,
             diameter: diameter,
             spacing: spacing
         )
@@ -193,6 +198,7 @@ public struct NotchLayout: Equatable, Sendable {
     public func resolvedToastWidth(
         side: NotchSide,
         itemCount: Int,
+        style: NotchDisplayStyle = .ring,
         diameter: CGFloat = QuotaDonutMetrics.maximumDiameter,
         spacing: CGFloat = QuotaDonutMetrics.accountSpacing,
         notchBridgeWidth: CGFloat = QuotaClusterMetrics.notchBridgeWidth,
@@ -201,6 +207,7 @@ public struct NotchLayout: Equatable, Sendable {
         let base = panelFrame(
             side: side,
             itemCount: itemCount,
+            style: style,
             diameter: diameter,
             spacing: spacing,
             notchBridgeWidth: notchBridgeWidth,
@@ -214,6 +221,7 @@ public struct NotchLayout: Equatable, Sendable {
     public func resolvedDiameter(
         side: NotchSide,
         itemCount: Int,
+        style: NotchDisplayStyle = .ring,
         diameter: CGFloat = QuotaDonutMetrics.maximumDiameter,
         spacing: CGFloat = QuotaDonutMetrics.accountSpacing
     ) -> CGFloat {
@@ -228,6 +236,7 @@ public struct NotchLayout: Equatable, Sendable {
             guard candidate.isFinite, candidate > 0 else { return false }
             let visualFootprint = QuotaClusterMetrics.visualFootprint(
                 itemCount: itemCount,
+                style: style,
                 diameter: candidate,
                 spacing: safeSpacing
             )
@@ -252,6 +261,7 @@ public struct NotchLayout: Equatable, Sendable {
     public func itemFrames(
         side: NotchSide,
         itemCount: Int,
+        style: NotchDisplayStyle = .ring,
         diameter: CGFloat = QuotaDonutMetrics.maximumDiameter,
         spacing: CGFloat = QuotaDonutMetrics.accountSpacing,
         notchBridgeWidth: CGFloat = QuotaClusterMetrics.notchBridgeWidth,
@@ -259,20 +269,21 @@ public struct NotchLayout: Equatable, Sendable {
     ) -> [CGRect] {
         guard itemCount > 0 else { return [] }
 
-        let content = contentFrame(side: side, itemCount: itemCount, diameter: diameter, spacing: spacing)
+        let content = contentFrame(side: side, itemCount: itemCount, style: style, diameter: diameter, spacing: spacing)
         let safeDiameter = min(
-            resolvedDiameter(side: side, itemCount: itemCount, diameter: diameter, spacing: spacing),
+            resolvedDiameter(side: side, itemCount: itemCount, style: style, diameter: diameter, spacing: spacing),
             content.height
         )
         guard safeDiameter > 0 else { return [] }
         _ = notchBridgeWidth
         _ = toastWidth
-        let inset = QuotaClusterMetrics.visualInset(forDiameter: safeDiameter)
+        let inset = QuotaClusterMetrics.visualInset(forDiameter: safeDiameter, style: style)
         let contentInset = inset + QuotaClusterMetrics.containmentMargin
-        let offset = safeDiameter + finiteNonNegative(spacing)
+        let itemWidth = safeDiameter
+        let offset = itemWidth + finiteNonNegative(spacing)
         return (0..<itemCount).map { index in
             let x = content.minX + contentInset + CGFloat(index) * offset
-            return CGRect(x: x, y: content.midY - safeDiameter / 2, width: safeDiameter, height: safeDiameter)
+            return CGRect(x: x, y: content.midY - safeDiameter / 2, width: itemWidth, height: safeDiameter)
         }
     }
 

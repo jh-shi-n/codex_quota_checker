@@ -46,6 +46,7 @@ public final class NotchLayoutManager: NSObject {
     public let rightPanel: RightQuotaPanel
     public var screenProvider: @MainActor () -> NSScreen?
     public private(set) var currentLayout: NotchLayout?
+    public private(set) var displayStyle: NotchDisplayStyle
     public private(set) var showAccountLabels: Bool
     public private(set) var leftActivityToast: SessionActivityToast?
     public private(set) var rightActivityToast: SessionActivityToast?
@@ -59,6 +60,7 @@ public final class NotchLayoutManager: NSObject {
         screenProvider: @escaping @MainActor () -> NSScreen? = {
             NotchGeometry.primaryScreen(from: NSScreen.screens)
         },
+        displayStyle: NotchDisplayStyle = .ring,
         showAccountLabels: Bool = false,
         onRefresh: @escaping (AccountState) -> Void = { _ in },
         onSettings: @escaping () -> Void = {},
@@ -73,8 +75,10 @@ public final class NotchLayoutManager: NSObject {
         tokenUsagePreferences: PreferencesStore? = nil
     ) {
         self.screenProvider = screenProvider
+        self.displayStyle = displayStyle
         self.showAccountLabels = showAccountLabels
         self.leftPanel = LeftQuotaPanel(
+            displayStyle: displayStyle,
             showAccountLabels: showAccountLabels,
             onRefresh: onRefresh,
             onSettings: onSettings,
@@ -87,6 +91,7 @@ public final class NotchLayoutManager: NSObject {
         )
         self.centerPanel = CenterBridgePanel()
         self.rightPanel = RightQuotaPanel(
+            displayStyle: displayStyle,
             showAccountLabels: showAccountLabels,
             onRefresh: onRefresh,
             onSettings: onSettings,
@@ -111,6 +116,7 @@ public final class NotchLayoutManager: NSObject {
         leftAccounts: [AccountState],
         rightAccounts: [AccountState],
         menuBarHeight: CGFloat? = nil,
+        displayStyle: NotchDisplayStyle? = nil,
         showAccountLabels: Bool? = nil,
         accountDisplayNames: [String: String]? = nil,
         onRefresh: ((AccountState) -> Void)? = nil,
@@ -120,12 +126,15 @@ public final class NotchLayoutManager: NSObject {
             || leftAccounts.count != leftPanel.accounts.count
             || rightAccounts.count != rightPanel.accounts.count
             || menuBarHeight != nil
+            || (displayStyle != nil && displayStyle != self.displayStyle)
+        if let displayStyle { self.displayStyle = displayStyle }
         if let showAccountLabels {
             self.showAccountLabels = showAccountLabels
         }
         leftPanel.update(
             accounts: leftAccounts,
             menuBarHeight: menuBarHeight,
+            displayStyle: self.displayStyle,
             showAccountLabels: self.showAccountLabels,
             accountDisplayNames: accountDisplayNames,
             onRefresh: onRefresh,
@@ -134,6 +143,7 @@ public final class NotchLayoutManager: NSObject {
         rightPanel.update(
             accounts: rightAccounts,
             menuBarHeight: menuBarHeight,
+            displayStyle: self.displayStyle,
             showAccountLabels: self.showAccountLabels,
             accountDisplayNames: accountDisplayNames,
             onRefresh: onRefresh,
@@ -210,12 +220,14 @@ public final class NotchLayoutManager: NSObject {
         let leftDiameter = layout.resolvedDiameter(
             side: .left,
             itemCount: leftPanel.accounts.count,
+            style: displayStyle,
             diameter: requestedDiameter,
             spacing: QuotaDonutMetrics.accountSpacing
         )
         let rightDiameter = layout.resolvedDiameter(
             side: .right,
             itemCount: rightPanel.accounts.count,
+            style: displayStyle,
             diameter: requestedDiameter,
             spacing: QuotaDonutMetrics.accountSpacing
         )
@@ -225,6 +237,7 @@ public final class NotchLayoutManager: NSObject {
                 accounts: leftPanel.accounts,
                 menuBarHeight: effectiveMenuBarHeight,
                 diameterOverride: leftDiameter,
+                displayStyle: self.displayStyle,
                 showAccountLabels: self.showAccountLabels
             )
         }
@@ -233,6 +246,7 @@ public final class NotchLayoutManager: NSObject {
                 accounts: rightPanel.accounts,
                 menuBarHeight: effectiveMenuBarHeight,
                 diameterOverride: rightDiameter,
+                displayStyle: self.displayStyle,
                 showAccountLabels: self.showAccountLabels
             )
         }
@@ -242,6 +256,7 @@ public final class NotchLayoutManager: NSObject {
         let leftToastWidth = layout.resolvedToastWidth(
             side: .left,
             itemCount: leftPanel.accounts.count,
+            style: displayStyle,
             diameter: leftDiameter,
             spacing: QuotaDonutMetrics.accountSpacing,
             requestedWidth: NotchActivityToastMetrics.requiredWidth(for: leftDisplayedToast, names: leftPanel.accountDisplayNames)
@@ -249,6 +264,7 @@ public final class NotchLayoutManager: NSObject {
         let rightToastWidth = layout.resolvedToastWidth(
             side: .right,
             itemCount: rightPanel.accounts.count,
+            style: displayStyle,
             diameter: rightDiameter,
             spacing: QuotaDonutMetrics.accountSpacing,
             requestedWidth: NotchActivityToastMetrics.requiredWidth(for: rightDisplayedToast, names: rightPanel.accountDisplayNames)
@@ -257,6 +273,7 @@ public final class NotchLayoutManager: NSObject {
         let leftFrame = layout.panelFrame(
             side: .left,
             itemCount: leftPanel.accounts.count,
+            style: displayStyle,
             diameter: leftDiameter,
             spacing: QuotaDonutMetrics.accountSpacing,
             toastWidth: leftToastWidth
@@ -264,6 +281,7 @@ public final class NotchLayoutManager: NSObject {
         let rightFrame = layout.panelFrame(
             side: .right,
             itemCount: rightPanel.accounts.count,
+            style: displayStyle,
             diameter: rightDiameter,
             spacing: QuotaDonutMetrics.accountSpacing,
             toastWidth: rightToastWidth

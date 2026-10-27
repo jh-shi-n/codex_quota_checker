@@ -203,6 +203,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     notchLayoutManager.update(
                         leftAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .left),
                         rightAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .right),
+                        displayStyle: preferences.notchDisplayStyle,
                         showAccountLabels: preferences.showAccountLabels
                     )
                 },
@@ -420,6 +421,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         notchLayoutManager.update(
             leftAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .left),
             rightAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .right),
+            displayStyle: preferences.notchDisplayStyle,
             showAccountLabels: preferences.showAccountLabels,
             accountDisplayNames: preferences.accountDisplayNames,
             onRefresh: { [weak self] account in

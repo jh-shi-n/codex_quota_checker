@@ -116,6 +116,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
     public let tokenUsagePreferences: PreferencesStore?
     public private(set) var menuBarHeight: CGFloat
     public private(set) var diameterOverride: CGFloat?
+    public private(set) var displayStyle: NotchDisplayStyle
     public private(set) var showAccountLabels: Bool
     /// Stable model observed by the single hosting root for this panel.
     public let activityPresentation: NotchActivityPresentationModel
@@ -138,6 +139,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         accounts: [AccountState] = [],
         menuBarHeight: CGFloat = 24,
         diameterOverride: CGFloat? = nil,
+        displayStyle: NotchDisplayStyle = .ring,
         showAccountLabels: Bool = false,
         onRefresh: @escaping (AccountState) -> Void = { _ in },
         onSettings: @escaping () -> Void = {},
@@ -162,6 +164,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         self.tokenUsagePreferences = tokenUsagePreferences
         self.menuBarHeight = menuBarHeight
         self.diameterOverride = diameterOverride
+        self.displayStyle = displayStyle
         self.showAccountLabels = showAccountLabels
         self.activityPresentation = activityPresentation ?? NotchActivityPresentationModel(
             toast: activityToast,
@@ -185,6 +188,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
             accounts: accounts,
             menuBarHeight: menuBarHeight,
             diameterOverride: diameterOverride,
+            displayStyle: displayStyle,
             showAccountLabels: showAccountLabels,
             onRefresh: onRefresh,
             onSettings: onSettings,
@@ -202,6 +206,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         accounts: [AccountState],
         menuBarHeight: CGFloat? = nil,
         diameterOverride: CGFloat? = nil,
+        displayStyle: NotchDisplayStyle? = nil,
         showAccountLabels: Bool? = nil,
         accountDisplayNames: [String: String]? = nil,
         onRefresh: ((AccountState) -> Void)? = nil,
@@ -217,6 +222,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         if let accountDisplayNames { self.accountDisplayNames = accountDisplayNames }
         if let menuBarHeight { self.menuBarHeight = menuBarHeight }
         if let diameterOverride { self.diameterOverride = diameterOverride }
+        if let displayStyle { self.displayStyle = displayStyle }
         if let showAccountLabels { self.showAccountLabels = showAccountLabels }
         if let onRefresh { self.onRefresh = onRefresh }
         if let onSettings { self.onSettings = onSettings }
@@ -276,6 +282,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
             side: .left,
             menuBarHeight: menuBarHeight,
             diameterOverride: diameterOverride,
+            displayStyle: displayStyle,
             showAccountLabels: showAccountLabels,
             onRefresh: onRefresh,
             onSettings: onSettings,

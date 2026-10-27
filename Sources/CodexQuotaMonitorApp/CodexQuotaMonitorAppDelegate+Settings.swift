@@ -54,6 +54,14 @@ extension CodexQuotaMonitorAppDelegate {
                     set: { [weak self] enabled in self?.applyLaunchAtLogin(enabled) }
                 ),
                 launchAtLoginService: self.launchAtLoginService,
+                notchDisplayStyle: Binding(
+                    get: { store.notchDisplayStyle },
+                    set: { [weak self] style in
+                        guard let self else { return }
+                        self.preferences.updateNotchDisplayStyle(style)
+                        self.render(states: self.accountStore.states)
+                    }
+                ),
                 showAccountLabels: Binding(
                     get: { [weak self] in self?.preferences.showAccountLabels ?? false },
                     set: { [weak self] enabled in self?.applyShowAccountLabels(enabled) }
