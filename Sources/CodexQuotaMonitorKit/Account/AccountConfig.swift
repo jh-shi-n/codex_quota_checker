@@ -169,6 +169,9 @@ public struct AccountConfig: Identifiable, Codable, Equatable, Hashable, Sendabl
         isConfigured ? home : nil
     }
 
+    /// 선택 폴더의 메타데이터에 따른 제공자 판별
+    public var provider: AccountProvider { isConfigured ? .detect(home: home) : .codex }
+
     public var authFile: URL {
         home.appendingPathComponent("auth.json", isDirectory: false)
     }
