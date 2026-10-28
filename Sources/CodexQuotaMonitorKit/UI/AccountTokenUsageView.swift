@@ -32,8 +32,8 @@ struct AccountTokenUsageView: View {
     /// 집계 기준과 하단에서 분리한 조회 상태·오류 안내 구성
     private var usageHelp: String {
         if account.provider == .claude {
-            return "공식 OpenTelemetry claude_code.token.usage 카운터의 입력·출력·캐시 읽기·쓰기 합계입니다. 동일 누적값 재전송은 중복 합산하지 않습니다.\n이 기기에서 수집을 활성화한 이후 수신한 범위이며 웹·다른 기기·과거 전체 계정 사용량이 아닙니다. 수신일의 UTC 날짜로 표시하며 수신하지 않은 날은 0과 구분합니다."
-                + (store.hasFailed(for: account) ? "\n공식 수집값 조회 실패 · 마지막 정상 결과가 있으면 유지합니다." : "")
+            return "연결한 Claude 폴더의 로컬 기록 기준입니다. 웹·다른 기기의 사용량과 계정 전체 서버 통계는 포함하지 않습니다. 같은 폴더에서 계정을 바꿨다면 과거 계정의 기록도 포함될 수 있습니다.\n과거는 Stats 캐시를 우선하고 누락 날짜와 오늘은 세션 기록으로 보완합니다. 날짜별로 한 출처만 사용하며 OpenTelemetry 수신값을 더하지 않습니다.\n입력·출력·캐시 읽기·쓰기 합계이며 로그의 동일 응답은 중복 제거합니다. UTC 날짜 기준, 최근 12개월 기록 합계이며 미제공 날짜는 0과 구분합니다."
+                + (store.hasFailed(for: account) ? "\n로컬 집계 실패 · 마지막 정상 결과가 있으면 유지합니다." : "")
         }
         var lines = [
             "오늘 사용량: 서버 값을 우선하고, 없으면 연결 계정의 로컬 세션 기록으로 보완",
@@ -92,13 +92,13 @@ struct AccountTokenUsageView: View {
             if snapshot != nil || localToday != nil {
                 if options.weeklyChartEnabled { weeklyChart } else { heatmap }
                 HStack(spacing: 18) {
-                    metric(account.provider == .claude ? "수신 누적 토큰" : "누적 토큰", snapshot?.lifetimeTokens)
-                    metric(account.provider == .claude ? "수신일 최대 토큰" : "일 최대 토큰", snapshot?.peakDailyTokens)
+                    metric(account.provider == .claude ? "기록 합계 토큰" : "누적 토큰", snapshot?.lifetimeTokens)
+                    metric(account.provider == .claude ? "기록 일 최대 토큰" : "일 최대 토큰", snapshot?.peakDailyTokens)
                 }
                 if account.provider == .claude && snapshot?.days?.isEmpty != false {
-                    Text("공식 토큰 수신 대기").font(.caption2).foregroundStyle(.secondary)
+                    Text("로컬 토큰 기록 없음").font(.caption2).foregroundStyle(.secondary)
                 } else if let snapshot {
-                    Text("\(account.provider == .claude ? "공식 수집" : "서버 조회") \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
+                    Text("\(account.provider == .claude ? "로컬 집계" : "서버 조회") \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
                     .font(.caption2).foregroundStyle(.secondary)
                 }
             } else {
@@ -111,6 +111,13 @@ struct AccountTokenUsageView: View {
         .environment(\.timeZone, AccountUsageCalendar.calendar.timeZone)
         .task(id: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") {
             await store.refresh(for: account)?.value
+            if account.provider == .claude {
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(15)) } catch { break }
+                    guard !Task.isCancelled else { break }
+                    await store.refresh(for: account, force: true)?.value
+                }
+            }
         }
         .onChange(of: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") { _, _ in
             selectedDate = nil
@@ -279,10 +286,10 @@ struct AccountTokenUsageView: View {
     private func detail(_ day: AccountUsageCalendar.Day) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(AccountUsageCalendar.label(day.date)).font(.caption.weight(.semibold))
-            Text("계정 토큰 합계").font(.caption).foregroundStyle(.secondary)
+            Text(account.provider == .claude ? "폴더 토큰 합계" : "계정 토큰 합계").font(.caption).foregroundStyle(.secondary)
             Text(value(day)).font(.callout.monospacedDigit())
             Text(account.provider == .claude
-                 ? (day.tokens == nil ? "이 날짜에 수신한 공식 토큰 수치가 없습니다." : "공식 토큰 카운터 수신값")
+                 ? (day.tokens == nil ? "이 날짜의 로컬 토큰 기록이 없습니다." : "Stats 캐시 또는 세션 기록 집계")
                  : (day.isLocal ? "연결 계정의 로컬 사용량" : (day.tokens == nil ? "이 날짜의 서버 수치가 없습니다." : "서버 제공 사용량")))
                 .font(.caption2).foregroundStyle(.secondary)
         }

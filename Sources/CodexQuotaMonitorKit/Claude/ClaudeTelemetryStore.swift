@@ -114,7 +114,7 @@ public actor ClaudeTelemetryStore {
         let summary: [String: CodexJSONValue] = days.isEmpty ? [:] : ["lifetimeTokens": .number(Double(total)), "peakDailyTokens": .number(Double(days.values.max() ?? 0))]
         return try AccountTokenUsage(result: .object(["summary": .object(summary),
             "dailyUsageBuckets": .array(days.sorted { $0.key < $1.key }.map { .object(["startDate": .string($0.key), "tokens": .number(Double($0.value))]) })]),
-            fetchedAt: archive.updatedAt, accountEmail: email)
+            fetchedAt: archive.updatedAt, accountEmail: email, source: .claudeTelemetry)
     }
 
     /// OTLP 문자열 속성만 허용하며 원문 이벤트는 사용하지 않는 속성 투영
