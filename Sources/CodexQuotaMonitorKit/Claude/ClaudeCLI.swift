@@ -8,10 +8,12 @@ import Foundation
 
 /// 인증정보 원문을 포함하지 않는 CLI 실패 구분
 public enum ClaudeQuotaError: Error, LocalizedError, Equatable {
-    case cliMissing, loginRequired, unsupportedAccount, timeout, invalidData, settingsChanged
+    case cliMissing, loginRequired, unsupportedAccount, timeout, invalidData, settingsChanged, rateLimited, liveQueryFailed
 
     public var errorDescription: String? {
         switch self {
+        case .rateLimited: return "Claude 사용량 조회가 제한되었습니다. 잠시 후 다시 시도해 주세요. 표시된 값은 마지막 수신값입니다."
+        case .liveQueryFailed: return "Claude 공식 /usage 조회를 완료하지 못했습니다. CLI 로그인 상태를 확인해 주세요."
         case .cliMissing: return "Claude CLI를 찾지 못했습니다."
         case .loginRequired: return "선택한 폴더의 Claude CLI에 로그인해 주세요."
         case .unsupportedAccount: return "Claude Pro·Max 구독의 할당량만 지원합니다. API 계정은 별도 과금입니다."
@@ -76,10 +78,18 @@ public struct ClaudeCLI: Sendable {
 
     /// API 키 환경 우회를 제거하고 선택 설정 폴더의 로그인 상태만 조회
     public func authentication(home: URL) throws -> ClaudeAuthentication {
+        let data = try run(arguments: ["auth", "status"], home: home, limit: timeout)
+        guard let authentication = try? JSONDecoder().decode(ClaudeAuthentication.self, from: data) else { throw ClaudeQuotaError.invalidData }
+        guard authentication.loggedIn, authentication.email?.isEmpty == false else { throw ClaudeQuotaError.loginRequired }
+        return authentication
+    }
+
+    /// 표준입력을 닫은 CLI 명령의 크기·시간 제한 실행, 민감 출력의 로그 제외
+    func run(arguments: [String], home: URL, limit: TimeInterval) throws -> Data {
         guard let executable else { throw ClaudeQuotaError.cliMissing }
         let process = Process()
         process.executableURL = executable
-        process.arguments = ["auth", "status"]
+        process.arguments = arguments
         process.environment = Self.environment(home: home)
         process.currentDirectoryURL = home
         process.standardInput = FileHandle.nullDevice
@@ -91,7 +101,7 @@ public struct ClaudeCLI: Sendable {
         defer { try? handle.close() }
         process.standardOutput = handle
         try process.run()
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = Date().addingTimeInterval(limit)
         while process.isRunning && Date() < deadline && !Task.isCancelled {
             Thread.sleep(forTimeInterval: 0.02)
         }
@@ -103,11 +113,8 @@ public struct ClaudeCLI: Sendable {
             process.waitUntilExit()
             throw ClaudeQuotaError.timeout
         }
-        let attributes = try FileManager.default.attributesOfItem(atPath: output.path)
-        guard (attributes[.size] as? NSNumber)?.intValue ?? 0 <= 1_048_576,
-              let authentication = try? JSONDecoder().decode(ClaudeAuthentication.self, from: Data(contentsOf: output))
-        else { throw ClaudeQuotaError.invalidData }
-        guard authentication.loggedIn, authentication.email?.isEmpty == false else { throw ClaudeQuotaError.loginRequired }
-        return authentication
+        let size = try FileManager.default.attributesOfItem(atPath: output.path)[.size] as? NSNumber
+        guard (size?.intValue ?? 0) <= 1_048_576 else { throw ClaudeQuotaError.invalidData }
+        return try Data(contentsOf: output)
     }
 }

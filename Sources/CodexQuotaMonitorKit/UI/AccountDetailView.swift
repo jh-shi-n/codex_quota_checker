@@ -206,7 +206,7 @@ public struct AccountDetailView: View {
                 .buttonStyle(.appAction)
                 .disabled(account.status == .notConfigured || account.isRefreshing || account.isResetVerificationPending || accountTokenUsageStore.isLoading(for: account))
                 .keyboardShortcut("r", modifiers: [.command])
-                .help(account.provider == .claude ? "Claude CLI에서 마지막으로 수신한 사용량 다시 읽기" : "이 계정의 할당량과 토큰 사용량 새로고침")
+                .help(account.provider == .claude ? "공식 Claude /usage 명령으로 현재 사용량 조회" : "이 계정의 할당량과 토큰 사용량 새로고침")
                 .accessibilityLabel("계정 새로고침")
             }
 

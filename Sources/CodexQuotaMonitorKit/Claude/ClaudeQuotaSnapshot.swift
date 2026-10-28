@@ -107,7 +107,18 @@ public struct ClaudeQuotaService: Sendable {
 
     /// 메인 스레드 밖에서 인증·스냅샷 확인, 추론 요청 없음
     public func state(for config: AccountConfig) async -> AccountState {
-        await Task.detached { stateSync(for: config) }.value
+        guard config.isConfigured else { return .notConfigured(id: config.id) }
+        do {
+            try await ClaudeUsageQuery.shared.refresh(home: config.home, cli: cli)
+            return await Task.detached { stateSync(for: config) }.value
+        } catch {
+            var state = await Task.detached { stateSync(for: config) }.value
+            if state.status == .normal {
+                state.status = (error as? ClaudeQuotaError) == .loginRequired ? .loginRequired : .error
+                state.errorMessage = (error as? ClaudeQuotaError)?.errorDescription ?? "Claude 사용량 조회를 완료하지 못했습니다."
+            }
+            return state
+        }
     }
 
     /// 현재 계정 지문과 일치하는 미만료 구간만 기존 화면 상태로 변환
@@ -141,7 +152,7 @@ public struct ClaudeQuotaService: Sendable {
             } else if windows.values.contains(where: { now.timeIntervalSince($0.observedAt) > 900 }) {
                 state.errorMessage = "마지막으로 수신한 사용량입니다. Claude CLI 사용 시 갱신되며 웹·앱 사용이 아직 반영되지 않았을 수 있습니다."
             } else {
-                state.errorMessage = "Claude CLI에서 수신한 계정 전체 사용량입니다. 새로고침은 마지막 수신값을 다시 읽습니다."
+                state.errorMessage = "공식 Claude /usage 조회로 확인한 계정 전체 사용량입니다. 새로고침 시 서버 사용량을 다시 확인합니다."
             }
             if needsRepair { state.errorMessage = repairMessage + " 표시된 사용량은 마지막 수신값입니다." }
             state.primaryResetObservation = primary == nil ? .checking : .stableObserved
