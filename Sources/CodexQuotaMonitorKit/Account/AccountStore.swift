@@ -210,7 +210,8 @@ public final class AccountStore: ObservableObject {
 
     /// 검증 결과와 계정 식별 정보를 같은 경로 캐시에 저장
     private func saveVerifiedSnapshot(_ state: AccountState) {
-        guard let config = configs.first(where: { $0.id == state.id }), state.status == .normal else { return }
+        guard state.provider == .codex,
+              let config = configs.first(where: { $0.id == state.id }), state.status == .normal else { return }
         preferencesStore.updateQuotaSnapshot(for: config.home, snapshot: .init(
             usedPercent: state.primaryUsedPercent, remainingPercent: state.primaryRemainingPercent,
             resetAt: state.primaryResetAt, secondaryUsedPercent: state.secondaryUsedPercent,
@@ -600,14 +601,6 @@ public final class AccountStore: ObservableObject {
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
         var state = result.state
         state.configurationGeneration = states[index].configurationGeneration
-        if state.provider == .claude {
-            resetHistories[state.id] = nil
-            resetBaselines[state.id] = nil
-            states[index] = state
-            refreshRecoveryStates[state.id] = nil
-            logQuotaResult(.quotaResultApplied, result: result)
-            return
-        }
         var changes: [QuotaResetChange] = []
         if state.status == .normal {
             var history = resetHistories[state.id]
@@ -708,6 +701,10 @@ public final class AccountStore: ObservableObject {
         logQuotaResult(.quotaResultApplied, result: result)
         guard result.config.isConfigured, result.state.status == .normal else { return }
         let resetNotification = EarlyQuotaReset.notification(accountID: state.id, changes: changes, now: observationNow())
+        if state.provider == .claude {
+            if let resetNotification { onEarlyQuotaReset?(resetNotification) }
+            return
+        }
         preferencesStore.updateQuotaSnapshot(
             for: result.config.home,
             snapshot: PreferencesStore.QuotaSnapshot(

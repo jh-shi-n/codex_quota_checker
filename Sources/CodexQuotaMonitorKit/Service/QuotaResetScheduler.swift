@@ -58,7 +58,8 @@ public final class QuotaResetScheduler {
                 let reset = window == .primary ? account.primaryResetAt : account.secondaryResetAt
                 let observation = window == .primary ? account.primaryResetObservation : account.secondaryResetObservation
                 let segmentID = window == .primary ? account.primaryResetSegmentID : account.secondaryResetSegmentID
-                if var old = entries[key], sameIdentity(old.account, account), old.segmentID == segmentID {
+                if var old = entries[key], sameIdentity(old.account, account),
+                   old.segmentID == segmentID || (account.provider == .claude && old.resetAt <= now && !old.boundaryHandled) {
                     // 도달과 동시에 정기 조회가 완료되어도 미처리 도달 이벤트 유지
                     if old.resetAt <= now && !old.boundaryHandled,
                        [.normal, .loading, .timeout, .error].contains(account.status) {
@@ -158,7 +159,7 @@ public final class QuotaResetScheduler {
             let updated = refreshed[id]
             for entry in due where entry.account.id == id {
                 guard let current = accounts[id], sameIdentity(entry.account, current), !Task.isCancelled else { continue }
-                if entry.segmentID != segmentID(current, window: entry.window) {
+                if entry.account.provider != .claude, entry.segmentID != segmentID(current, window: entry.window) {
                     guard let updated, QuotaResetChange.detect(previous: entry.account, current: updated, now: now)
                         .contains(where: { $0.window.rawValue == entry.window.rawValue && $0.kind == .reset && $0.cause == .scheduled }) else { continue }
                 }
@@ -183,7 +184,7 @@ public final class QuotaResetScheduler {
 
     /// 계정 경로 세대·로그인 계정·구독의 일치 확인
     private func sameIdentity(_ lhs: AccountState, _ rhs: AccountState) -> Bool {
-        lhs.id == rhs.id && lhs.configurationGeneration == rhs.configurationGeneration
+        lhs.id == rhs.id && lhs.provider == rhs.provider && lhs.configurationGeneration == rhs.configurationGeneration
             && lhs.email == rhs.email && lhs.planType == rhs.planType
     }
 

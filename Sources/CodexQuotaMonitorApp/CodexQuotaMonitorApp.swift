@@ -401,7 +401,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             }
             if let self { ClaudeTelemetryServer.shared.configure(self.accountStore.configs) }
             self?.quotaResetScheduler.reconcile(
-                states: states.filter { $0.provider == .codex }, reminderMinutes: preferences.resetReminderMinutes
+                states: states, reminderMinutes: preferences.resetReminderMinutes
             )
             self?.automaticResetPing.reconcile(states: states.filter { $0.provider == .codex }, enabled: preferences.automaticResetPingEnabled && !(self?.quotaMonitoring.isStarting ?? true))
             self?.render(states: states)
