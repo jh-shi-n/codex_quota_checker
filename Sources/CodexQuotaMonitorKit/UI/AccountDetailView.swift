@@ -114,6 +114,18 @@ public struct AccountDetailView: View {
         }
     }
 
+    /// 서비스별 고정 색상의 독립 배지 표시
+    private var serviceBadge: some View {
+        Text(account.provider.displayName)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Color.black)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(account.provider == .claude ? Color.orange : Color.white))
+            .fixedSize()
+            .accessibilityLabel("사용 중인 서비스: \(account.provider.displayName)")
+    }
+
     /// 계정 정보와 버튼에 인접한 조회 시각·상태의 2행 표시
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -129,7 +141,8 @@ public struct AccountDetailView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .help(AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id))
-                    Text((account.provider == .claude ? "Claude · " : "") + AccountDashboardFormatting.subscriptionBadgeText(account.planType))
+                    serviceBadge
+                    Text(AccountDashboardFormatting.subscriptionBadgeText(account.planType))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(SubscriptionBadgeStyle.accentColor(for: account.planType))
                         .padding(.horizontal, 7)
