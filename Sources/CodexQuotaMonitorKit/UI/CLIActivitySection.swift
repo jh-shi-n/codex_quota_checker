@@ -298,6 +298,7 @@ public struct CLIActivitySection: View {
         isExpanded: Bool
     ) -> some View {
         let metadata = Self.modelMetadataText(model: item.session.model, reasoningEffort: item.session.reasoningEffort)
+            ?? (account.provider == .claude ? "모델 정보 수신 대기" : nil)
         return Button {
             toggleSession(item.id)
         } label: {
@@ -431,7 +432,8 @@ public struct CLIActivitySection: View {
 
     private func sessionAccessibilityLabel(for item: SessionActivityPresentationItem) -> String {
         var values = [Self.sessionTitle(item.title)]
-        if let metadata = Self.modelMetadataText(model: item.session.model, reasoningEffort: item.session.reasoningEffort) {
+        if let metadata = Self.modelMetadataText(model: item.session.model, reasoningEffort: item.session.reasoningEffort)
+            ?? (account.provider == .claude ? "모델 정보 수신 대기" : nil) {
             values.append(metadata)
         }
         values.append(Self.shortSessionID(item.session.threadID))

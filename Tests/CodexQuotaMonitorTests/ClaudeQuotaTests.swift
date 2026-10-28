@@ -177,4 +177,20 @@ final class ClaudeQuotaTests: XCTestCase {
         XCTAssertFalse(ClaudeStatusLineConnection.needsRepair(home: home))
     }
 
+    /// 할당량 응답 전에도 공식 모델 수신·변경·잘못된 식별자 거부 검증
+    func testOfficialModelCaptureWithoutQuota() throws {
+        let (home, cli) = try fixture()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let id = "33333333-3333-3333-3333-333333333333"
+        let data = Data("{\"session_id\":\"\(id)\",\"model\":{\"id\":\"claude-opus-5-5\"},\"effort\":{\"level\":\"high\"}}".utf8)
+        try ClaudeQuotaSnapshot.capture(input: data, home: home, cli: cli)
+        XCTAssertNil(try ClaudeQuotaSnapshot.read(home: home))
+        XCTAssertEqual(ClaudeSessionMetadata.read(home: home, sessionID: id)?.model, "claude-opus-5-5")
+        XCTAssertEqual(ClaudeSessionMetadata.read(home: home, sessionID: id)?.effort, "high")
+        let changed = Data("{\"session_id\":\"\(id)\",\"model\":{\"id\":\"claude-sonnet-5\"}}".utf8)
+        try ClaudeQuotaSnapshot.capture(input: changed, home: home, cli: cli)
+        XCTAssertEqual(ClaudeSessionMetadata.read(home: home, sessionID: id)?.model, "claude-sonnet-5")
+        XCTAssertNil(ClaudeSessionMetadata.read(home: home, sessionID: "../unsafe"))
+    }
+
 }

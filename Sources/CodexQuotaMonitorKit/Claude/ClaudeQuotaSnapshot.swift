@@ -71,7 +71,7 @@ public struct ClaudeQuotaSnapshot: Codable, Equatable, Sendable {
     /// 인증을 확인한 수집값만 0600·원자적 교체로 저장, 빈 초기 응답은 쓰기 생략
     public static func capture(input: Data, home: URL, cli: ClaudeCLI = ClaudeCLI(), now: Date = Date()) throws {
         guard input.count <= 1_048_576, let payload = try JSONSerialization.jsonObject(with: input) as? [String: Any],
-              let rates = payload["rate_limits"] as? [String: Any], !rates.isEmpty else { return }
+              ((payload["rate_limits"] as? [String: Any])?.isEmpty == false || payload["model"] is [String: Any]) else { return }
         let directory = directory(home: home)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let lock = Darwin.open(directory.appendingPathComponent("capture.lock").path, O_CREAT | O_RDWR, 0o600)
@@ -89,6 +89,7 @@ public struct ClaudeQuotaSnapshot: Codable, Equatable, Sendable {
             try JSONEncoder().encode(authentication.identity).write(to: binding, options: [.atomic])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: binding.path)
         }
+        try ClaudeSessionMetadata.write(payload: payload, identity: authentication.identity, sessionID: sessionID, home: home, now: now)
         let previous = try? read(home: home)
         guard let snapshot = try merging(input: input, identity: authentication.identity, previous: previous, now: now) else { return }
         let data = try JSONEncoder().encode(snapshot)

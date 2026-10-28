@@ -47,9 +47,11 @@ public struct ClaudeSessionActivityProvider: SessionActivityProvider {
                 }
                 let updated = (object["updatedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
                 let validUpdated = updated.flatMap { $0 <= now.addingTimeInterval(30) ? $0 : nil }
+                let metadata = ClaudeSessionMetadata.read(home: home, sessionID: id, now: now)
                 sessions.append(SessionActivityMainSession(threadID: id, source: .cli,
                     taskName: SessionActivityMetadataSanitizer.text(object["name"] as? String) ?? "Claude session",
-                    status: status, agents: [], isActive: true, lastActivityAt: validUpdated))
+                    status: status, agents: [], isActive: true, lastActivityAt: validUpdated,
+                    model: metadata?.model, reasoningEffort: metadata?.effort))
             }
             return SessionActivitySnapshot(accountID: accountID, state: .available,
                 sessions: SessionActivityMainSession.ordered(sessions), source: .cli)
