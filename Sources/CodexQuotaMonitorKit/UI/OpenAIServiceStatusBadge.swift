@@ -20,10 +20,12 @@ extension EnvironmentValues {
 public struct OpenAIServiceStatusBadge: View {
     @ObservedObject private var store: OpenAIServiceStatusStore
     @State private var isExpanded = false
+    private let provider: AccountProvider
 
     /// 네 계정이 동일하게 관찰할 저장소 연결
-    public init(store: OpenAIServiceStatusStore) {
+    public init(store: OpenAIServiceStatusStore, provider: AccountProvider = .codex) {
         self.store = store
+        self.provider = provider
     }
 
     public var body: some View {
@@ -44,19 +46,21 @@ public struct OpenAIServiceStatusBadge: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.appGraphic)
-        .help("OpenAI 서비스 현황")
+        .help("\(serviceName) 서비스 현황")
         .accessibilityLabel(accessibilityLabel)
         .popover(isPresented: $isExpanded, arrowEdge: .bottom) {
-            OpenAIServiceStatusDetails(snapshot: store.snapshot, refreshFailed: store.refreshFailed)
+            OpenAIServiceStatusDetails(snapshot: store.snapshot, refreshFailed: store.refreshFailed, provider: provider)
         }
     }
 
+    private var serviceName: String { provider == .claude ? "Claude" : "OpenAI" }
+
     /// 색상·표정을 보지 않고도 상태를 구분할 수 있는 접근성 문구
     private var accessibilityLabel: String {
-        guard let snapshot = store.snapshot else { return "OpenAI 서비스 현황 미확인" }
+        guard let snapshot = store.snapshot else { return "\(serviceName) 서비스 현황 미확인" }
         return snapshot.affectedComponents.isEmpty
-            ? "OpenAI 서비스 현황 정상"
-            : "OpenAI 서비스 현황 \(snapshot.affectedComponents.count)개 기능 알림"
+            ? "\(serviceName) 서비스 현황 정상"
+            : "\(serviceName) 서비스 현황 \(snapshot.affectedComponents.count)개 기능 알림"
     }
 
 }
@@ -130,16 +134,18 @@ struct OpenAIServiceStatusGroup: Identifiable {
 public struct OpenAIServiceStatusDetails: View {
     public let snapshot: OpenAIServiceStatusSnapshot?
     public let refreshFailed: Bool
+    public let provider: AccountProvider
 
     /// 마지막 성공 스냅샷·미확인 및 이후 조회 실패 여부 지정
-    public init(snapshot: OpenAIServiceStatusSnapshot?, refreshFailed: Bool = false) {
+    public init(snapshot: OpenAIServiceStatusSnapshot?, refreshFailed: Bool = false, provider: AccountProvider = .codex) {
         self.snapshot = snapshot
         self.refreshFailed = refreshFailed
+        self.provider = provider
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("OpenAI 서비스 현황")
+            Text(provider == .claude ? "Claude 서비스 현황" : "OpenAI 서비스 현황")
                 .font(.headline)
             if let snapshot {
                 Text("\(AccountDashboardFormatting.dateText(snapshot.checkedAt, timeStyle: .medium)) 기준")
@@ -173,7 +179,7 @@ public struct OpenAIServiceStatusDetails: View {
                 }
                 .frame(height: min(CGFloat(snapshot?.components.count ?? 0) * 27 + CGFloat(statusGroups.count) * 42, 320))
             }
-            Link("공식 상태 페이지 열기", destination: URL(string: "https://status.openai.com/")!)
+            Link("공식 상태 페이지 열기", destination: URL(string: provider == .claude ? "https://status.claude.com/" : "https://status.openai.com/")!)
                 .font(.caption)
         }
         .padding(16)
@@ -183,7 +189,15 @@ public struct OpenAIServiceStatusDetails: View {
 
     /// 이슈 항목을 상단에 모으고 정상 항목을 하단에 배치한 목록
     var statusGroups: [OpenAIServiceStatusGroup] {
-        OpenAIServiceStatusGroup.grouped(snapshot?.components ?? [])
+        let components = snapshot?.components ?? []
+        if provider == .claude {
+            guard !components.isEmpty else { return [] }
+            return [true, false].map { affected in
+                OpenAIServiceStatusGroup(title: affected ? "이슈" : "정상", isAffected: affected,
+                    rows: components.filter { $0.isAffected == affected }.map { OpenAIServiceStatusRow(section: "Claude", component: $0) })
+            }
+        }
+        return OpenAIServiceStatusGroup.grouped(components)
     }
 
     /// 상태 그룹 제목·개수·제품명을 포함한 기능 목록 구성

@@ -28,6 +28,8 @@ public final class AccountSetupModel: ObservableObject {
     @Published public private(set) var connectedAccount: AccountState?
     @Published public private(set) var discoveryMessage: String?
     @Published public private(set) var isRegistering = false
+    /// 입력 폴더의 CLI 제공자 판별
+    public var detectedProvider: AccountProvider { .detect(home: URL(fileURLWithPath: validator.normalizedPath(path))) }
     public let isRecovery: Bool
 
     public var canCheck: Bool { !validator.normalizedPath(path).isEmpty && phase != .checking && !isRegistering }
@@ -43,7 +45,7 @@ public final class AccountSetupModel: ObservableObject {
     public init(
         validator: AccountPathValidator = .live,
         isRecovery: Bool = false,
-        checker: @escaping AccountSetupChecker = { await CodexQuotaService().state(for: $0) }
+        checker: @escaping AccountSetupChecker = { await AccountQuotaService.state(for: $0) }
     ) {
         self.validator = validator
         self.isRecovery = isRecovery
@@ -56,7 +58,7 @@ public final class AccountSetupModel: ObservableObject {
         didAttemptDiscovery = true
         let candidate = validator.homeDirectory.appendingPathComponent(".codex").path
         guard validator.validate(candidate) == .valid else {
-            discoveryMessage = "기본 계정을 찾지 못했습니다. Codex에서 경로를 확인하거나 폴더를 선택해 주세요."
+            discoveryMessage = "기본 계정을 찾지 못했습니다. Codex 또는 Claude에서 경로를 확인하거나 폴더를 선택해 주세요."
             return
         }
         path = candidate
@@ -99,6 +101,9 @@ public final class AccountSetupModel: ObservableObject {
         verifiedPath = normalized
         connectedAccount = account
         message = account.email.map { "\($0) 계정의 연결을 확인했습니다." } ?? "계정 연결을 확인했습니다."
+        if account.provider == .claude, account.primaryUsedPercent == nil, account.secondaryUsedPercent == nil {
+            message = "Claude 로그인 확인 완료. 계정을 연결한 뒤 우상단 새로고침으로 사용량을 다시 조회할 수 있습니다."
+        }
         phase = .connected
     }
 

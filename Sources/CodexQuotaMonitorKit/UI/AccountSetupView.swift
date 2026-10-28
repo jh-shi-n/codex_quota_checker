@@ -29,11 +29,13 @@ public struct AccountSetupView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("1. Codex 로그인 준비")
+                        Text("1. CLI 로그인 준비")
                             .font(.headline)
-                        Text("Codex CLI에서 사용하려는 계정에 먼저 로그인해 주세요.")
+                        Text("Codex 또는 Claude CLI에서 사용하려는 계정에 먼저 로그인해 주세요.")
                             .font(.callout)
                         Link("설치·로그인 안내", destination: URL(string: "https://developers.openai.com/codex/cli")!)
+                            .font(.caption)
+                        Link("Claude 설치·로그인 안내", destination: URL(string: "https://code.claude.com/docs/en/quickstart")!)
                             .font(.caption)
                     }
 
@@ -46,7 +48,7 @@ public struct AccountSetupView: View {
                                 .foregroundStyle(.secondary)
                         }
                         HStack {
-                            TextField("Codex 계정 폴더 경로", text: $model.path)
+                            TextField("Codex 또는 Claude 계정 폴더 경로", text: $model.path)
                                 .textFieldStyle(.roundedBorder)
                                 .accessibilityIdentifier("account-setup-path")
                                 .onSubmit { checkConnection() }
@@ -60,6 +62,10 @@ public struct AccountSetupView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         AccountPathHelpView()
+                        if model.detectedProvider == .claude {
+                            Text("계정을 연결하면 우상단 새로고침으로 할당량과 토큰 사용량을 조회합니다. 별도 수집 연결은 필요하지 않습니다.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
 
                     VStack(alignment: .leading, spacing: 8) {

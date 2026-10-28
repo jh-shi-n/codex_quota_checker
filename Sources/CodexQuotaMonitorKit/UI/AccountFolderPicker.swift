@@ -9,8 +9,8 @@ public enum AccountFolderPicker {
     /// 폴더 한 개만 선택하고 취소 시 nil 반환
     public static func choose(currentPath: String = "") -> String? {
         let panel = NSOpenPanel()
-        panel.title = "Codex 계정 폴더 선택"
-        panel.message = "사용하려는 Codex 계정의 폴더를 선택해 주세요. 숨김 폴더도 표시됩니다."
+        panel.title = "CLI 계정 폴더 선택"
+        panel.message = "사용하려는 Codex 또는 Claude 계정의 폴더를 선택해 주세요. 숨김 폴더도 표시됩니다."
         panel.prompt = "폴더 선택"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false

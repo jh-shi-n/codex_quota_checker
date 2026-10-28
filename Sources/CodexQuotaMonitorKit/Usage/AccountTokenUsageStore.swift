@@ -116,8 +116,11 @@ public final class AccountTokenUsageStore: ObservableObject {
         }
     }
 
-    /// 현재 계정의 마지막 정상 서버 응답 조회
-    public func snapshot(for account: AccountState) -> AccountTokenUsage? { snapshots[Key(account)] }
+    /// 현재 제공자 출처와 일치하는 마지막 정상 집계 조회
+    public func snapshot(for account: AccountState) -> AccountTokenUsage? {
+        guard let value = snapshots[Key(account)], account.provider != .claude || value.source == .claudeLocal else { return nil }
+        return value
+    }
     /// 서버 캐시에 합치지 않는 현재 계정의 당일 로컬 보완값
     public func localTodaySnapshot(for account: AccountState) -> TokenUsageSnapshot? {
         guard let snapshot = localSnapshots[Key(account)],

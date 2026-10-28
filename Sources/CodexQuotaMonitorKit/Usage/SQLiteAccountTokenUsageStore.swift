@@ -63,7 +63,7 @@ final class SQLiteAccountTokenUsageStore: Sendable {
                 let payload = try JSONDecoder().decode(Payload.self, from: data)
                 guard payload.version == 1, payload.fetchedAt <= now,
                       payload.fetchedAt.addingTimeInterval(Self.lifetime) > now else { return nil }
-                return try AccountTokenUsage(result: payload.result, fetchedAt: payload.fetchedAt, accountEmail: payload.email)
+                return try AccountTokenUsage(result: payload.result, fetchedAt: payload.fetchedAt, accountEmail: payload.email, source: payload.source ?? .server)
             }
         }
     }
@@ -112,10 +112,12 @@ final class SQLiteAccountTokenUsageStore: Sendable {
         let fetchedAt: Date
         let email: String?
         let result: CodexJSONValue
+        let source: AccountTokenUsage.Source?
 
         /// 미제공·빈 배열·실제 0을 유지하는 서버 응답 재구성
         init(_ snapshot: AccountTokenUsage) {
             version = 1
+            source = snapshot.source
             fetchedAt = snapshot.fetchedAt
             email = snapshot.accountEmail
             var summary: [String: CodexJSONValue] = [:]

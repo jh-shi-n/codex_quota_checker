@@ -5,6 +5,9 @@ import Foundation
 
 /// 서버 날짜 문자열 그대로 유지하는 일별 계정 토큰 합계
 public struct AccountTokenUsage: Equatable, Sendable {
+    /// 서버·이전 수신 카운터·현재 폴더 기록의 출처 구분
+    public enum Source: String, Codable, Sendable { case server, claudeTelemetry, claudeLocal }
+    public let source: Source
     /// 서버 일별 버킷과 로컬 보완 집계에 공통 적용하는 UTC 날짜 기준
     public static var reportingCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -27,10 +30,11 @@ public struct AccountTokenUsage: Equatable, Sendable {
     public let days: [Day]?
 
     /// 누락·null 유지 및 잘못된 숫자·날짜·중복 날짜의 전체 응답 거절
-    public init(result: CodexJSONValue, fetchedAt: Date = Date(), accountEmail: String? = nil) throws {
+    public init(result: CodexJSONValue, fetchedAt: Date = Date(), accountEmail: String? = nil, source: Source = .server) throws {
         guard let object = result.objectValue, let summary = object["summary"]?.objectValue else {
             throw CodexQuotaServiceError.malformedResponse("Missing token usage summary")
         }
+        self.source = source
         self.fetchedAt = fetchedAt
         self.accountEmail = accountEmail
         lifetimeTokens = try Self.counter(summary["lifetimeTokens"])

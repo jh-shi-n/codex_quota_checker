@@ -3,6 +3,8 @@ import Foundation
 /// Immutable snapshot consumed by the UI for one account.
 public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     public let id: String
+    /// 동일 슬롯의 제공자별 화면·캐시 식별
+    public var provider: AccountProvider = .codex
     /// 경로 변경 시 상세 화면 상태를 분리하는 비영속 슬롯 세대
     public var configurationGeneration = 0
     /// 최초 조회 전 대기와 실제 로딩의 비영속 구분
@@ -105,8 +107,10 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
         resetCredits: RateLimitResetCredits? = nil,
         lastUpdated: Date? = nil,
         status: AccountStatus,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        provider: AccountProvider = .codex
     ) {
+        self.provider = provider
         self.resetCredits = resetCredits
         self.id = id
         self.email = email
@@ -142,7 +146,7 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
 
     /// 캐시 로딩의 식별 정보 최초 보완 허용; 기존 로그인·구독·경로 세대 변경 차단
     public func acceptsIdentity(of other: AccountState) -> Bool {
-        guard id == other.id, configurationGeneration == other.configurationGeneration else { return false }
+        guard id == other.id, provider == other.provider, configurationGeneration == other.configurationGeneration else { return false }
         if status == .loading, email == nil, planType == nil { return true }
         return email == other.email && planType == other.planType
     }
@@ -162,7 +166,7 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, email, planType, resetCredits
+        case id, email, planType, resetCredits, provider
         case primaryUsedPercent, secondaryUsedPercent
         case primaryRemainingPercent, secondaryRemainingPercent
         case primaryResetAt, secondaryResetAt
@@ -188,7 +192,8 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
             resetCredits: try container.decodeIfPresent(RateLimitResetCredits.self, forKey: .resetCredits),
             lastUpdated: try container.decodeIfPresent(Date.self, forKey: .lastUpdated),
             status: try container.decode(AccountStatus.self, forKey: .status),
-            errorMessage: try container.decodeIfPresent(String.self, forKey: .errorMessage)
+            errorMessage: try container.decodeIfPresent(String.self, forKey: .errorMessage),
+            provider: try container.decodeIfPresent(AccountProvider.self, forKey: .provider) ?? .codex
         )
     }
 
@@ -196,6 +201,7 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(resetCredits, forKey: .resetCredits)
         try container.encode(id, forKey: .id)
+        try container.encode(provider, forKey: .provider)
         try container.encodeIfPresent(email, forKey: .email)
         try container.encodeIfPresent(planType, forKey: .planType)
         try container.encodeIfPresent(primaryUsedPercent, forKey: .primaryUsedPercent)

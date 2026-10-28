@@ -34,8 +34,18 @@ public final class QuotaRefreshCoordinator {
         guard !Task.isCancelled, running.insert(accountID).inserted else { return }
         defer { running.remove(accountID) }
         let previous = store.state(for: accountID)
-        guard await store.refresh(accountID: accountID, forceFresh: true), !Task.isCancelled,
-              let first = store.state(for: accountID), first.status == .normal,
+        await store.refresh(accountID: accountID, forceFresh: true)
+        guard !Task.isCancelled, var first = store.state(for: accountID) else { return }
+        if first.provider == .claude, let previous, previous.acceptsIdentity(of: first),
+           [.normal, .error, .timeout].contains(first.status),
+           Self.hasMissingExpiredWindow(previous: previous, current: first, now: now()) {
+            do { try await sleep(3) } catch { return }
+            guard !Task.isCancelled, let active = store.state(for: accountID), active.acceptsIdentity(of: first) else { return }
+            await store.refresh(accountID: accountID, forceFresh: true)
+            guard !Task.isCancelled, let retried = store.state(for: accountID), retried.acceptsIdentity(of: first) else { return }
+            first = retried
+        }
+        guard first.status == .normal,
               let firstUpdated = first.lastUpdated, abs(firstUpdated.timeIntervalSince(now())) <= 30 else { return }
         let scheduleWindows = Self.scheduleRecheckWindows(previous: previous, current: first, now: now())
         let changedWindows = Self.largeChangeWindows(previous: previous, current: first)
@@ -71,6 +81,18 @@ public final class QuotaRefreshCoordinator {
         } else if startup, let previous {
             store.finishResetVerification(expected: first, comparedTo: previous)
         }
+    }
+
+    /// Claude 초기화 경계의 만료·누락 구간에 한정한 추가 조회 판별
+    private static func hasMissingExpiredWindow(previous: AccountState, current: AccountState, now: Date) -> Bool {
+        for (oldReset, newReset, used) in [
+            (previous.primaryResetAt, current.primaryResetAt, current.primaryUsedPercent),
+            (previous.secondaryResetAt, current.secondaryResetAt, current.secondaryUsedPercent)
+        ] {
+            if let oldReset, oldReset <= now,
+               current.status != .normal || used == nil || newReset.map({ $0 <= now }) != false { return true }
+        }
+        return false
     }
 
     /// 현재 응답에 제공된 한도만 대상으로 신규·만료 일정을 재확인

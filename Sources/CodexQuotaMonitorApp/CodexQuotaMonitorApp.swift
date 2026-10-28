@@ -16,6 +16,15 @@ enum CodexQuotaMonitorEntryPoint {
     /// macOS 14의 Settings Scene 생성 충돌을 기존 AppKit 수명주기로 우회
     @MainActor
     static func main() {
+        if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--claude-quota-capture" {
+            let input = try? ClaudeQuotaSnapshot.readInput(FileHandle.standardInput)
+            if let input, input.count <= 1_048_576 {
+                try? ClaudeQuotaSnapshot.capture(input: input,
+                    home: URL(fileURLWithPath: CommandLine.arguments[2]),
+                    cli: ClaudeCLI(executable: URL(fileURLWithPath: CommandLine.arguments[3]), timeout: 3))
+            }
+            return
+        }
         do { try AppStartupValidator.validate() }
         catch {
             let failure = (error as? AppOperationFailure) ?? AppOperationFailure(.unexpected, "앱 초기화에 실패했습니다.", underlying: error)
@@ -106,7 +115,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         current: { [weak self] id in self?.accountStore.state(for: id) }
     )
     let launchAtLoginService: LaunchAtLoginService
-    let sessionActivityProvider: SQLiteSessionActivityProvider
+    let sessionActivityProvider: ProviderSessionActivityProvider
     /// The probe service owns process lifetime and the per-account running gate.
     let usageWindowProbeService: UsageWindowProbeService
     let sessionActivityToastQueue: SessionActivityToastQueue
@@ -137,7 +146,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
         let quotaMonitoring = QuotaMonitoringController(store: accountStore, preferences: preferences)
         let launchAtLoginService = LaunchAtLoginService()
-        let sessionActivityProvider = SQLiteSessionActivityProvider()
+        let sessionActivityProvider = ProviderSessionActivityProvider()
         let usageWindowProbeService = UsageWindowProbeService()
         let sessionActivityToastQueue = SessionActivityToastQueue(
             durationSeconds: preferences.activityNotificationDurationSeconds
@@ -274,14 +283,17 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
         preferences.onAutomaticResetPingChanged = { [weak self] enabled in
             guard let self else { return }
-            self.automaticResetPing.reconcile(states: self.accountStore.states, enabled: enabled && !self.quotaMonitoring.isStarting)
+            self.automaticResetPing.reconcile(states: self.accountStore.states.filter { $0.provider == .codex }, enabled: enabled && !self.quotaMonitoring.isStarting)
             if enabled, self.quotaResetNotifications.delivery.status.authorization == .notRequested {
                 self.quotaResetNotifications.retryAuthorization()
             }
         }
 
-        accountStore.onQuotaRefreshStarted = { [weak serviceStatus] in
+        accountStore.onQuotaRefreshStarted = { [weak self, weak serviceStatus] in
             serviceStatus?.refresh()
+            if self?.accountStore.configs.contains(where: { $0.isConfigured && $0.provider == .claude }) == true {
+                ClaudeServiceStatus.shared.refresh()
+            }
         }
 
         accountStore.onEarlyQuotaReset = { [weak self] reset in
@@ -304,7 +316,12 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                   let config = self.accountStore.configs.first(where: { $0.id == account.id }),
                   self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
             else { return .failure(.notConfigured) }
-            let result = await CodexQuotaService().fetchTokenUsage(for: config)
+            let result: Result<AccountTokenUsage, CodexQuotaServiceError>
+            if config.provider == .claude {
+                result = await ClaudeTokenUsageProvider().fetch(for: config, expectedEmail: account.email)
+            } else {
+                result = await CodexQuotaService().fetchTokenUsage(for: config)
+            }
             guard self.accountStore.configs.first(where: { $0.id == account.id }) == config,
                   self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
                   self.accountStore.state(for: account.id)?.email == account.email else { return .failure(.cancelled) }
@@ -316,7 +333,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
         AccountTokenUsageStore.shared.localTodayLoader = { [weak self] account in
             guard let self,
-                  let config = self.accountStore.configs.first(where: { $0.id == account.id }),
+                  let config = self.accountStore.configs.first(where: { $0.id == account.id }), config.provider == .codex,
                   let home = config.configuredHome,
                   self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
                   self.accountStore.state(for: account.id)?.email == account.email else { return nil }
@@ -385,7 +402,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             self?.quotaResetScheduler.reconcile(
                 states: states, reminderMinutes: preferences.resetReminderMinutes
             )
-            self?.automaticResetPing.reconcile(states: states, enabled: preferences.automaticResetPingEnabled && !(self?.quotaMonitoring.isStarting ?? true))
+            self?.automaticResetPing.reconcile(states: states.filter { $0.provider == .codex }, enabled: preferences.automaticResetPingEnabled && !(self?.quotaMonitoring.isStarting ?? true))
             self?.render(states: states)
         }
     }
@@ -456,7 +473,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         _ account: AccountState, creditID: String, attempt: String
     ) async -> Result<ResetCreditOutcome, CodexQuotaServiceError> {
         guard let config = accountStore.configs.first(where: { $0.id == account.id }),
-              config.isConfigured,
+              config.isConfigured, config.provider == .codex,
               accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
         else { return .failure(.notConfigured) }
         let result = await CodexQuotaService().consumeResetCredit(
@@ -478,7 +495,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
         defer { runningProbeAccountIDs.remove(account.id) }
         guard let config = accountStore.configs.first(where: { $0.id == account.id }),
-              config.isConfigured,
+              config.isConfigured, config.provider == .codex,
               accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
         else {
             return AccountDashboardDefaults.unavailableProbe(
@@ -527,7 +544,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// 서버 캐시 무효화를 위한 슬롯별 계정 경로 구성
+    /// 제공자별 토큰 캐시 무효화를 위한 슬롯별 계정 경로 구성
     private static func configuredHomes(for configs: [AccountConfig]) -> [String: URL] {
         Dictionary(uniqueKeysWithValues: configs.compactMap { config in
             config.configuredHome.map { (config.id, $0) }

@@ -34,8 +34,8 @@ public struct AccountQuotaSection: View {
                         now: context.date
                     )
                     quotaCard(
-                        title: "전체 할당량",
-                        subtitle: "Overall quota",
+                        title: account.provider == .claude ? "주간 할당량" : "전체 할당량",
+                        subtitle: account.provider == .claude ? "Weekly quota" : "Overall quota",
                         remaining: account.overallRemainingPercent,
                         resetAt: account.secondaryResetAt,
                         observation: account.secondaryResetObservation,
