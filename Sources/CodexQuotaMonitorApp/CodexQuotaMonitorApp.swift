@@ -16,6 +16,15 @@ enum CodexQuotaMonitorEntryPoint {
     /// macOS 14의 Settings Scene 생성 충돌을 기존 AppKit 수명주기로 우회
     @MainActor
     static func main() {
+        if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--claude-quota-capture" {
+            let input = try? ClaudeQuotaSnapshot.readInput(FileHandle.standardInput)
+            if let input, input.count <= 1_048_576 {
+                try? ClaudeQuotaSnapshot.capture(input: input,
+                    home: URL(fileURLWithPath: CommandLine.arguments[2]),
+                    cli: ClaudeCLI(executable: URL(fileURLWithPath: CommandLine.arguments[3]), timeout: 3))
+            }
+            return
+        }
         do { try AppStartupValidator.validate() }
         catch {
             let failure = (error as? AppOperationFailure) ?? AppOperationFailure(.unexpected, "앱 초기화에 실패했습니다.", underlying: error)
