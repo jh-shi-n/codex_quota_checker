@@ -313,10 +313,15 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
         AccountTokenUsageStore.shared.loader = { [weak self] account in
             guard let self,
-                  let config = self.accountStore.configs.first(where: { $0.id == account.id }), config.provider == .codex,
+                  let config = self.accountStore.configs.first(where: { $0.id == account.id }),
                   self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
             else { return .failure(.notConfigured) }
-            let result = await CodexQuotaService().fetchTokenUsage(for: config)
+            let result: Result<AccountTokenUsage, CodexQuotaServiceError>
+            if config.provider == .claude {
+                result = await ClaudeTokenUsageProvider().fetch(for: config, expectedEmail: account.email)
+            } else {
+                result = await CodexQuotaService().fetchTokenUsage(for: config)
+            }
             guard self.accountStore.configs.first(where: { $0.id == account.id }) == config,
                   self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
                   self.accountStore.state(for: account.id)?.email == account.email else { return .failure(.cancelled) }
@@ -390,10 +395,11 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         statesCancellable = accountStore.$states.sink { [weak self] states in
             if let self {
                 AccountTokenUsageStore.shared.restore(
-                    accounts: states.filter { $0.provider == .codex },
+                    accounts: states,
                     homes: Self.configuredHomes(for: self.accountStore.configs)
                 )
             }
+            if let self { ClaudeTelemetryServer.shared.configure(self.accountStore.configs) }
             self?.quotaResetScheduler.reconcile(
                 states: states.filter { $0.provider == .codex }, reminderMinutes: preferences.resetReminderMinutes
             )
@@ -452,7 +458,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             await self.quotaMonitoring.checks.refresh(accountID: id)
             guard let account = self.accountStore.state(for: id) else { return }
-            if account.provider == .codex { await AccountTokenUsageStore.shared.refresh(for: account, force: true)?.value }
+            await AccountTokenUsageStore.shared.refresh(for: account, force: true)?.value
         }
     }
 
@@ -539,9 +545,9 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// 서버 캐시 무효화를 위한 슬롯별 계정 경로 구성
+    /// 제공자별 토큰 캐시 무효화를 위한 슬롯별 계정 경로 구성
     private static func configuredHomes(for configs: [AccountConfig]) -> [String: URL] {
-        Dictionary(uniqueKeysWithValues: configs.filter { $0.provider == .codex }.compactMap { config in
+        Dictionary(uniqueKeysWithValues: configs.compactMap { config in
             config.configuredHome.map { (config.id, $0) }
         })
     }

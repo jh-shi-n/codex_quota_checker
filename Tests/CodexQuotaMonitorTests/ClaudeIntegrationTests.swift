@@ -105,15 +105,35 @@ final class ClaudeIntegrationTests: XCTestCase {
         XCTAssertNotNil(account.email)
         XCTAssertNotNil(account.primaryUsedPercent)
         XCTAssertNotNil(account.secondaryUsedPercent)
-        let sessions = await ProviderSessionActivityProvider().snapshot(accountID: "C1", home: home)
+        let modelDeadline = Date().addingTimeInterval(5)
+        var sessions = await ProviderSessionActivityProvider().snapshot(accountID: "C1", home: home)
+        while !sessions.sessions.contains(where: { $0.model != nil }) && Date() < modelDeadline {
+            try await Task.sleep(for: .milliseconds(100))
+            sessions = await ProviderSessionActivityProvider().snapshot(accountID: "C1", home: home)
+        }
+        XCTAssertTrue(sessions.sessions.contains(where: { $0.model != nil }))
         XCTAssertEqual(sessions.state, .available)
         XCTAssertFalse(sessions.sessions.isEmpty)
         let report: [String: Any] = ["provider": account.provider.rawValue, "account_verified": account.email != nil,
             "plan": account.planType ?? "", "five_hour_used": try XCTUnwrap(account.primaryUsedPercent),
-            "seven_day_used": try XCTUnwrap(account.secondaryUsedPercent), "live_sessions": sessions.sessions.count,
+            "seven_day_used": try XCTUnwrap(account.secondaryUsedPercent), "live_sessions": sessions.sessions.count, "models": sessions.sessions.compactMap(\.model),
             "setup_can_finish": model.canFinish, "registered_slot": "C1", "codex_cache_written": preferences.quotaSnapshot(for: home) != nil]
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: "/private/tmp/claude-quota-live-result.json"))
-        let view = AccountDetailView(account: account, loadSessionActivity: { _ in sessions })
+        let currentSessions = sessions
+        ClaudeTelemetryServer.shared.configure(store.configs)
+        let previousLoader = AccountTokenUsageStore.shared.loader
+        AccountTokenUsageStore.shared.loader = { current in
+            await ClaudeTokenUsageProvider().fetch(for: AccountConfig(id: current.id, home: home, position: .left), expectedEmail: current.email)
+        }
+        defer {
+            AccountTokenUsageStore.shared.invalidateAll()
+            AccountTokenUsageStore.shared.loader = previousLoader
+        }
+        await AccountTokenUsageStore.shared.refresh(for: account, force: true)?.value
+        if ProcessInfo.processInfo.environment["CLAUDE_TELEMETRY_EXPECT_DATA"] == "1" {
+            XCTAssertGreaterThan(AccountTokenUsageStore.shared.snapshot(for: account)?.lifetimeTokens ?? 0, 0)
+        }
+        let view = AccountDetailView(account: account, loadSessionActivity: { _ in currentSessions })
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         hosting.frame = NSRect(x: 0, y: 0, width: 720, height: 620)
         hosting.layoutSubtreeIfNeeded()

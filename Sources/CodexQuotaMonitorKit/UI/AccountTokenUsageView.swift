@@ -1,4 +1,4 @@
-// 목적: 서버 사용량과 당일 로컬 보완값의 잔디·주간 차트 표시
+// 목적: 제공자별 공식 토큰 사용량과 당일 보완값의 잔디·주간 차트 표시
 // 이용처: 계정 상세의 유일한 토큰 사용량 영역
 // 사용방법: 계정 저장소와 차트 옵션 전달; 제목 옆 도움말에 집계 기준·조회 상태 표시
 import Charts
@@ -13,7 +13,7 @@ struct AccountTokenUsagePreferencesView: View {
     }
 }
 
-/// 잔디·날짜별 상세 및 주간 막대·선그래프의 서버 데이터 표시
+/// 잔디·날짜별 상세 및 주간 막대·선그래프의 제공자별 토큰 표시
 struct AccountTokenUsageView: View {
     let account: AccountState
     @ObservedObject var store: AccountTokenUsageStore
@@ -31,6 +31,10 @@ struct AccountTokenUsageView: View {
 
     /// 집계 기준과 하단에서 분리한 조회 상태·오류 안내 구성
     private var usageHelp: String {
+        if account.provider == .claude {
+            return "공식 OpenTelemetry claude_code.token.usage 카운터의 입력·출력·캐시 읽기·쓰기 합계입니다. 동일 누적값 재전송은 중복 합산하지 않습니다.\n이 기기에서 수집을 활성화한 이후 수신한 범위이며 웹·다른 기기·과거 전체 계정 사용량이 아닙니다. 수신일의 UTC 날짜로 표시하며 수신하지 않은 날은 0과 구분합니다."
+                + (store.hasFailed(for: account) ? "\n공식 수집값 조회 실패 · 마지막 정상 결과가 있으면 유지합니다." : "")
+        }
         var lines = [
             "오늘 사용량: 서버 값을 우선하고, 없으면 연결 계정의 로컬 세션 기록으로 보완",
             "이전 날짜 사용량: 서버가 제공한 일별 사용량 기준",
@@ -84,14 +88,17 @@ struct AccountTokenUsageView: View {
                 if !options.weeklyChartEnabled { Text("(최근 24주)").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
             }
+            if account.provider == .claude { ClaudeTokenCollectionView(account: account) }
             if snapshot != nil || localToday != nil {
                 if options.weeklyChartEnabled { weeklyChart } else { heatmap }
                 HStack(spacing: 18) {
-                    metric("누적 토큰", snapshot?.lifetimeTokens)
-                    metric("일 최대 토큰", snapshot?.peakDailyTokens)
+                    metric(account.provider == .claude ? "수신 누적 토큰" : "누적 토큰", snapshot?.lifetimeTokens)
+                    metric(account.provider == .claude ? "수신일 최대 토큰" : "일 최대 토큰", snapshot?.peakDailyTokens)
                 }
-                if let snapshot {
-                    Text("서버 조회 \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
+                if account.provider == .claude && snapshot?.days?.isEmpty != false {
+                    Text("공식 토큰 수신 대기").font(.caption2).foregroundStyle(.secondary)
+                } else if let snapshot {
+                    Text("\(account.provider == .claude ? "공식 수집" : "서버 조회") \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
                     .font(.caption2).foregroundStyle(.secondary)
                 }
             } else {
@@ -274,7 +281,9 @@ struct AccountTokenUsageView: View {
             Text(AccountUsageCalendar.label(day.date)).font(.caption.weight(.semibold))
             Text("계정 토큰 합계").font(.caption).foregroundStyle(.secondary)
             Text(value(day)).font(.callout.monospacedDigit())
-            Text(day.isLocal ? "연결 계정의 로컬 사용량" : (day.tokens == nil ? "이 날짜의 서버 수치가 없습니다." : "서버 제공 사용량"))
+            Text(account.provider == .claude
+                 ? (day.tokens == nil ? "이 날짜에 수신한 공식 토큰 수치가 없습니다." : "공식 토큰 카운터 수신값")
+                 : (day.isLocal ? "연결 계정의 로컬 사용량" : (day.tokens == nil ? "이 날짜의 서버 수치가 없습니다." : "서버 제공 사용량")))
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(10)

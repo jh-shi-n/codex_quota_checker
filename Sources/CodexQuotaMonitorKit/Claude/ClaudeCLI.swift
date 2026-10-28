@@ -8,10 +8,12 @@ import Foundation
 
 /// 인증정보 원문을 포함하지 않는 CLI 실패 구분
 public enum ClaudeQuotaError: Error, LocalizedError, Equatable {
-    case cliMissing, loginRequired, unsupportedAccount, timeout, invalidData, settingsChanged, rateLimited, liveQueryFailed
+    case cliMissing, loginRequired, unsupportedAccount, timeout, invalidData, settingsChanged, rateLimited, liveQueryFailed, telemetryConflict, telemetryUnavailable
 
     public var errorDescription: String? {
         switch self {
+        case .telemetryUnavailable: return "공식 토큰 수집기를 실행하지 못했습니다. 로컬 포트 사용 상태를 확인한 뒤 다시 연결해 주세요."
+        case .telemetryConflict: return "기존 OpenTelemetry 수집 설정이 있어 유지했습니다. 기존 수집 경로를 해제한 뒤 다시 연결해 주세요."
         case .rateLimited: return "Claude 사용량 조회가 제한되었습니다. 잠시 후 다시 시도해 주세요. 표시된 값은 마지막 수신값입니다."
         case .liveQueryFailed: return "Claude 공식 /usage 조회를 완료하지 못했습니다. CLI 로그인 상태를 확인해 주세요."
         case .cliMissing: return "Claude CLI를 찾지 못했습니다."

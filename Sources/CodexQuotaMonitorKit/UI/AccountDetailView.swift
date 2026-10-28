@@ -62,12 +62,10 @@ public struct AccountDetailView: View {
 
                 AccountQuotaSection(account: displayedAccount)
 
-                if account.provider == .codex {
-                    if let tokenUsagePreferences {
-                        AccountTokenUsagePreferencesView(account: account, preferences: tokenUsagePreferences)
-                    } else {
-                        AccountTokenUsageView(account: account, store: .shared)
-                    }
+                if let tokenUsagePreferences {
+                    AccountTokenUsagePreferencesView(account: account, preferences: tokenUsagePreferences)
+                } else {
+                    AccountTokenUsageView(account: account, store: .shared)
                 }
                 accountActivity
 
