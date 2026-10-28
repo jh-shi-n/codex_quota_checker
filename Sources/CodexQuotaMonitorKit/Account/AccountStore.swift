@@ -75,7 +75,7 @@ public final class AccountStore: ObservableObject {
         configs: [AccountConfig] = AccountConfig.defaultAccounts(),
         preferencesStore: PreferencesStore? = nil,
         stateLoader: @escaping AccountStateLoader = { config in
-            await CodexQuotaService().state(for: config)
+            await AccountQuotaService.state(for: config)
         }
     ) {
         let normalized = Self.normalizeConfigs(configs)
@@ -542,7 +542,8 @@ public final class AccountStore: ObservableObject {
                     errorMessage: state.errorMessage
                 )
             }
-            if Self.shouldPreservePreviousSnapshot(for: state.status) {
+            state.provider = config.provider
+            if state.provider == .codex, Self.shouldPreservePreviousSnapshot(for: state.status) {
                 state = Self.mergedNonNormalState(state, previous: previous, id: config.id)
             }
             return AccountFetchResult(config: config, state: state)
@@ -599,6 +600,14 @@ public final class AccountStore: ObservableObject {
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
         var state = result.state
         state.configurationGeneration = states[index].configurationGeneration
+        if state.provider == .claude {
+            resetHistories[state.id] = nil
+            resetBaselines[state.id] = nil
+            states[index] = state
+            refreshRecoveryStates[state.id] = nil
+            logQuotaResult(.quotaResultApplied, result: result)
+            return
+        }
         var changes: [QuotaResetChange] = []
         if state.status == .normal {
             var history = resetHistories[state.id]
@@ -772,6 +781,11 @@ public final class AccountStore: ObservableObject {
         guard config.isConfigured else {
             return AccountState.notConfigured(id: config.id)
         }
+        if config.provider == .claude {
+            var state = AccountState(id: config.id, status: .loading, provider: .claude)
+            state.isWaitingForRefresh = true
+            return state
+        }
         guard let snapshot = preferencesStore.quotaSnapshot(for: config.home) else {
             var state = AccountState.loading(id: config.id)
             state.isWaitingForRefresh = true
@@ -823,8 +837,8 @@ public final class AccountStore: ObservableObject {
         previous: AccountState?,
         message: String
     ) -> AccountState {
-        guard let previous else {
-            return AccountState(id: config.id, status: .error, errorMessage: message)
+        guard let previous, config.provider == .codex else {
+            return AccountState(id: config.id, status: .error, errorMessage: message, provider: config.provider)
         }
         return AccountState(
             id: config.id,

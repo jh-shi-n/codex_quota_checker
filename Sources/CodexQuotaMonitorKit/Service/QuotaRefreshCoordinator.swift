@@ -35,7 +35,7 @@ public final class QuotaRefreshCoordinator {
         defer { running.remove(accountID) }
         let previous = store.state(for: accountID)
         guard await store.refresh(accountID: accountID, forceFresh: true), !Task.isCancelled,
-              let first = store.state(for: accountID), first.status == .normal,
+              let first = store.state(for: accountID), first.status == .normal, first.provider == .codex,
               let firstUpdated = first.lastUpdated, abs(firstUpdated.timeIntervalSince(now())) <= 30 else { return }
         let scheduleWindows = Self.scheduleRecheckWindows(previous: previous, current: first, now: now())
         let changedWindows = Self.largeChangeWindows(previous: previous, current: first)

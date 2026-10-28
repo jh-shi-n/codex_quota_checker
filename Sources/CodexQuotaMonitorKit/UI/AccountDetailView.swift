@@ -62,15 +62,16 @@ public struct AccountDetailView: View {
 
                 AccountQuotaSection(account: displayedAccount)
 
-                if let tokenUsagePreferences {
-                    AccountTokenUsagePreferencesView(account: account, preferences: tokenUsagePreferences)
-                } else {
-                    AccountTokenUsageView(account: account, store: .shared)
+                if account.provider == .codex {
+                    if let tokenUsagePreferences {
+                        AccountTokenUsagePreferencesView(account: account, preferences: tokenUsagePreferences)
+                    } else {
+                        AccountTokenUsageView(account: account, store: .shared)
+                    }
                 }
-
                 accountActivity
 
-                usageWindowProbeSection
+                if account.provider == .codex { usageWindowProbeSection }
 
                 if let errorMessage = account.errorMessage, !errorMessage.isEmpty {
                     Text(errorMessage)
@@ -128,7 +129,7 @@ public struct AccountDetailView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .help(AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id))
-                    Text(AccountDashboardFormatting.subscriptionBadgeText(account.planType))
+                    Text((account.provider == .claude ? "Claude · " : "") + AccountDashboardFormatting.subscriptionBadgeText(account.planType))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(SubscriptionBadgeStyle.accentColor(for: account.planType))
                         .padding(.horizontal, 7)
@@ -140,7 +141,7 @@ public struct AccountDetailView: View {
                                 lineWidth: 1
                             )
                         }
-                    if let serviceStatus {
+                    if account.provider == .codex, let serviceStatus {
                         OpenAIServiceStatusBadge(store: serviceStatus)
                     }
                     Button(action: onSettings) {
@@ -157,8 +158,9 @@ public struct AccountDetailView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    ResetCreditsBadge(account: displayedAccount, consume: consumeResetCredit)
-                        .fixedSize()
+                    if account.provider == .codex {
+                        ResetCreditsBadge(account: displayedAccount, consume: consumeResetCredit).fixedSize()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -188,7 +190,7 @@ public struct AccountDetailView: View {
                 .buttonStyle(.appAction)
                 .disabled(account.status == .notConfigured || account.isRefreshing || account.isResetVerificationPending || accountTokenUsageStore.isLoading(for: account))
                 .keyboardShortcut("r", modifiers: [.command])
-                .help("이 계정의 할당량과 토큰 사용량 새로고침")
+                .help(account.provider == .claude ? "Claude CLI에서 마지막으로 수신한 사용량 다시 읽기" : "이 계정의 할당량과 토큰 사용량 새로고침")
                 .accessibilityLabel("계정 새로고침")
             }
 
@@ -210,7 +212,9 @@ public struct AccountDetailView: View {
                     .font(.headline.weight(.semibold))
             }
 
-            Text("해당 계정의 최근 15분 CLI 활동을 표시합니다. Codex Desktop 앱 활동은 표시되지 않을 수 있습니다.")
+            Text(account.provider == .claude
+                 ? "선택한 Claude 폴더의 실행 중 CLI 세션을 표시합니다. 대화 내용은 읽지 않습니다."
+                 : "해당 계정의 최근 15분 CLI 활동을 표시합니다. Codex Desktop 앱 활동은 표시되지 않을 수 있습니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -273,7 +277,12 @@ public struct AccountDetailView: View {
 
     /// 계정 조회 상태의 상세 화면 표시명 변환
     public static func statusText(for account: AccountState) -> String {
-        account.status == .loading && account.isWaitingForRefresh ? "조회 대기" : statusText(for: account.status)
+        if account.provider == .claude {
+            if account.status == .codexNotFound { return "Claude not found" }
+            if account.status == .normal && account.lastUpdated == nil { return "사용량 대기" }
+            if account.status == .normal, let updated = account.lastUpdated, Date().timeIntervalSince(updated) > 900 { return "마지막 수신값" }
+        }
+        return account.status == .loading && account.isWaitingForRefresh ? "조회 대기" : statusText(for: account.status)
     }
 
     /// 실제 요청·정상·실패 상태의 표시명 변환

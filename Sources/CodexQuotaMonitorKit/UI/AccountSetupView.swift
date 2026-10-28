@@ -29,11 +29,13 @@ public struct AccountSetupView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("1. Codex 로그인 준비")
+                        Text("1. CLI 로그인 준비")
                             .font(.headline)
-                        Text("Codex CLI에서 사용하려는 계정에 먼저 로그인해 주세요.")
+                        Text("Codex 또는 Claude CLI에서 사용하려는 계정에 먼저 로그인해 주세요.")
                             .font(.callout)
                         Link("설치·로그인 안내", destination: URL(string: "https://developers.openai.com/codex/cli")!)
+                            .font(.caption)
+                        Link("Claude 설치·로그인 안내", destination: URL(string: "https://code.claude.com/docs/en/quickstart")!)
                             .font(.caption)
                     }
 
@@ -46,7 +48,7 @@ public struct AccountSetupView: View {
                                 .foregroundStyle(.secondary)
                         }
                         HStack {
-                            TextField("Codex 계정 폴더 경로", text: $model.path)
+                            TextField("Codex 또는 Claude 계정 폴더 경로", text: $model.path)
                                 .textFieldStyle(.roundedBorder)
                                 .accessibilityIdentifier("account-setup-path")
                                 .onSubmit { checkConnection() }
@@ -60,6 +62,17 @@ public struct AccountSetupView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         AccountPathHelpView()
+                        if model.detectedProvider == .claude {
+                            Text("Claude 폴더: 연결 확인 후 수집 연결을 설치하면 기존 상태 표시줄을 유지하면서 사용량을 받습니다. 프로젝트별 상태 표시줄 설정이 우선하는 경우 일부 세션은 수집되지 않을 수 있습니다.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Button(model.isClaudeCollectionInstalled ? "Claude 수집 연결 해제" : "Claude 수집 연결") {
+                                model.setClaudeCollectionEnabled(!model.isClaudeCollectionInstalled)
+                            }
+                            .disabled(!model.canFinish)
+                            if let message = model.collectionMessage {
+                                Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
+                        }
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
