@@ -51,6 +51,20 @@ final class ClaudeLocalTokenUsageTests: XCTestCase, @unchecked Sendable {
             }]).write(to: home.appendingPathComponent("stats-cache.json"))
     }
 
+    /// 큰 사용자·요청 기록 이후 정상 토큰 응답의 누락 없는 집계 검증
+    func testLargeNonUsageRowsDoNotPreventTokenRefresh() async throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let large = String(repeating: "x", count: 1_100_000)
+        try write([["type": "user", "message": ["content": large]],
+                   ["type": "api-request-blob", "data": large], row()], home: home)
+        let reader = ClaudeLocalTokenUsageReader(now: { self.reference })
+        let result = try await reader.snapshot(home: home, email: nil)
+        XCTAssertEqual(result.lifetimeTokens, 19)
+        let refreshed = try await reader.snapshot(home: home, email: nil)
+        XCTAssertEqual(refreshed.days, result.days)
+    }
+
     /// 캐시 우선·누락 과거·오늘·하위 에이전트의 날짜별 독립 집계 검증
     func testCacheWinsAndLogsFillMissingHistoryAndToday() async throws {
         let home = try home()

@@ -44,9 +44,9 @@ public actor ClaudeLocalTokenUsageReader {
         var accessed: Date
     }
 
-    /// 읽기 상한과 UTC 경계 검증용 시계 주입
+    /// 전체 256MB·행 8MB 기본 읽기 상한과 UTC 경계 검증용 시계 주입
     public init(maximumFiles: Int = 4096, maximumBytes: Int = 256 * 1024 * 1024,
-                maximumLineBytes: Int = 1024 * 1024, now: @escaping @Sendable () -> Date = { Date() }) {
+                maximumLineBytes: Int = 8 * 1024 * 1024, now: @escaping @Sendable () -> Date = { Date() }) {
         self.maximumFiles = max(0, maximumFiles)
         self.maximumBytes = max(0, maximumBytes)
         self.maximumLineBytes = max(1, maximumLineBytes)
