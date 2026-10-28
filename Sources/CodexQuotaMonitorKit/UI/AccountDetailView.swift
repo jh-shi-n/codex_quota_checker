@@ -154,7 +154,10 @@ public struct AccountDetailView: View {
                                 lineWidth: 1
                             )
                         }
-                    if account.provider == .codex, let serviceStatus {
+                    if account.provider == .claude {
+                        OpenAIServiceStatusBadge(store: ClaudeServiceStatus.shared, provider: .claude)
+                            .task { if ClaudeServiceStatus.shared.snapshot == nil { await ClaudeServiceStatus.shared.refresh().value } }
+                    } else if let serviceStatus {
                         OpenAIServiceStatusBadge(store: serviceStatus)
                     }
                     Button(action: onSettings) {

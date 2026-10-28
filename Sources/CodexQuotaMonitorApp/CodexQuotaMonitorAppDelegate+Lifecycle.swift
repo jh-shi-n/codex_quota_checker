@@ -77,6 +77,7 @@ extension CodexQuotaMonitorAppDelegate {
         UsageWindowProbeStore.shared.cancelAll()
         AccountTokenUsageStore.shared.invalidateAll()
         serviceStatus.cancel()
+        ClaudeServiceStatus.shared.cancel()
         appUpdates.cancel()
         emptyAccountsPopover?.performClose(nil)
         emptyAccountsPopover = nil

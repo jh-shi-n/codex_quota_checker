@@ -289,8 +289,11 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        accountStore.onQuotaRefreshStarted = { [weak serviceStatus] in
+        accountStore.onQuotaRefreshStarted = { [weak self, weak serviceStatus] in
             serviceStatus?.refresh()
+            if self?.accountStore.configs.contains(where: { $0.isConfigured && $0.provider == .claude }) == true {
+                ClaudeServiceStatus.shared.refresh()
+            }
         }
 
         accountStore.onEarlyQuotaReset = { [weak self] reset in
