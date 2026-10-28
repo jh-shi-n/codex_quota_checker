@@ -118,8 +118,10 @@ public struct ClaudeQuotaService: Sendable {
             state.email = authentication.email
             state.planType = authentication.subscriptionType
             guard authentication.supportsQuota else { throw ClaudeQuotaError.unsupportedAccount }
+            let repairMessage = "수집 실행파일을 찾지 못했습니다. 수집 연결을 해제한 뒤 현재 앱에서 다시 연결해 주세요."
+            let needsRepair = ClaudeStatusLineConnection.needsRepair(home: config.home)
             guard let snapshot = try ClaudeQuotaSnapshot.read(home: config.home), snapshot.identity == authentication.identity else {
-                state.errorMessage = "로그인을 확인했습니다. ‘Claude 수집 연결’ 후 Claude CLI에서 대화하면 사용량이 갱신됩니다."
+                state.errorMessage = needsRepair ? repairMessage : "로그인을 확인했습니다. ‘Claude 수집 연결’ 후 Claude CLI에서 대화하면 사용량이 갱신됩니다."
                 return state
             }
             let windows = snapshot.windows.filter {
@@ -140,6 +142,7 @@ public struct ClaudeQuotaService: Sendable {
             } else {
                 state.errorMessage = "Claude CLI에서 수신한 계정 전체 사용량입니다. 새로고침은 마지막 수신값을 다시 읽습니다."
             }
+            if needsRepair { state.errorMessage = repairMessage + " 표시된 사용량은 마지막 수신값입니다." }
             state.primaryResetObservation = primary == nil ? .checking : .stableObserved
             state.secondaryResetObservation = secondary == nil ? .checking : .stableObserved
         } catch {

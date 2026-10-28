@@ -10,6 +10,7 @@ public enum ClaudeStatusLineConnection {
         let original: Data?
         let installed: Data
         let settingsExisted: Bool
+        let appExecutable: String?
     }
 
     /// 선택 폴더의 기존 명령을 보존하는 고정 shim 경로 반환
@@ -24,6 +25,19 @@ public enum ClaudeStatusLineConnection {
               let status = settings["statusLine"] as? [String: Any],
               let command = status["command"] as? String else { return false }
         return command == shellQuote(script(home: home).path)
+    }
+
+    /// 앱 이동·삭제·개발 빌드 정리로 수집 실행 경로가 끊긴 상태 판별
+    public static func needsRepair(home: URL) -> Bool {
+        guard isInstalled(home: home) else { return false }
+        let file = ClaudeQuotaSnapshot.directory(home: home).appendingPathComponent("connection.json")
+        guard let data = try? Data(contentsOf: file),
+              let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
+              let executable = manifest.appExecutable,
+              FileManager.default.isExecutableFile(atPath: script(home: home).path) else { return true }
+        var directory = ObjCBool(false)
+        return !FileManager.default.fileExists(atPath: executable, isDirectory: &directory)
+            || directory.boolValue || !FileManager.default.isExecutableFile(atPath: executable)
     }
 
     /// 셸 인자 내부의 공백·따옴표·명령 치환을 리터럴로 보존
@@ -68,7 +82,7 @@ public enum ClaudeStatusLineConnection {
         installed["command"] = shellQuote(script(home: home).path)
         let manifest = Manifest(original: original,
             installed: try JSONSerialization.data(withJSONObject: installed, options: [.sortedKeys]),
-            settingsExisted: oldManifest?.settingsExisted ?? (originalData != nil))
+            settingsExisted: oldManifest?.settingsExisted ?? (originalData != nil), appExecutable: appExecutable.path)
         let body = """
         #!/bin/sh
         # 목적: 앱 수집 실패와 무관한 기존 Claude 상태 표시줄 보존

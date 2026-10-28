@@ -161,4 +161,20 @@ final class ClaudeQuotaTests: XCTestCase {
         XCTAssertThrowsError(try ClaudeStatusLineConnection.install(home: home, appExecutable: home, cliExecutable: try XCTUnwrap(cli.executable)))
     }
 
+    /// 앱 실행파일 소실 시 정상값을 보존하며 재연결 필요 안내 검증
+    func testMissingCollectorExecutableIsReported() throws {
+        let (home, cli) = try fixture()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = AccountConfig(id: "C1", home: home, position: .left)
+        let now = Date()
+        try ClaudeQuotaSnapshot.capture(input: input(now: now), home: home, cli: cli, now: now)
+        try ClaudeStatusLineConnection.install(home: home, appExecutable: home.appendingPathComponent("removed-app"), cliExecutable: try XCTUnwrap(cli.executable))
+        XCTAssertTrue(ClaudeStatusLineConnection.needsRepair(home: home))
+        let state = ClaudeQuotaService(cli: cli).stateSync(for: config)
+        XCTAssertEqual(state.primaryUsedPercent, 12)
+        XCTAssertTrue(state.errorMessage?.contains("수집 실행파일") == true)
+        try ClaudeStatusLineConnection.remove(home: home)
+        XCTAssertFalse(ClaudeStatusLineConnection.needsRepair(home: home))
+    }
+
 }
