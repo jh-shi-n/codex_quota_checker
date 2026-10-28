@@ -173,4 +173,22 @@ final class ClaudeTelemetryTests: XCTestCase {
         XCTAssertEqual(fresh.lifetimeTokens, 40)
     }
 
+    /// 임의 포트에서 확인한 사용 가능한 포트의 고정 바인딩 검증
+    func testFixedPortListenerStartsAfterReservationReleased() async throws {
+        let reservation = ClaudeTelemetryServer(port: 0)
+        reservation.start()
+        let firstDeadline = Date().addingTimeInterval(3)
+        while reservation.listeningPort == nil && Date() < firstDeadline { try await Task.sleep(for: .milliseconds(20)) }
+        let port = try XCTUnwrap(reservation.listeningPort)
+        reservation.stop()
+        try await Task.sleep(for: .milliseconds(100))
+        let fixed = ClaudeTelemetryServer(port: port)
+        fixed.start()
+        defer { fixed.stop() }
+        let deadline = Date().addingTimeInterval(3)
+        while fixed.listeningPort == nil && fixed.failureMessage == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(fixed.listeningPort, port)
+        XCTAssertNil(fixed.failureMessage)
+    }
+
 }

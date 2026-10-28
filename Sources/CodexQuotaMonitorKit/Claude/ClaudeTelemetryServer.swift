@@ -29,13 +29,14 @@ public final class ClaudeTelemetryServer: ObservableObject {
         do {
             let parameters = NWParameters.tcp
             parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
-            let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+            let listener = try NWListener(using: parameters)
             listener.stateUpdateHandler = { [weak self, weak listener] state in
                 Task { @MainActor in
                     guard let self, let listener, self.listener === listener else { return }
                     switch state {
                     case .ready: self.listeningPort = listener.port?.rawValue; self.failureMessage = nil
-                    case .failed:
+                    case .failed(let error):
+                        AppOperationFailure(.unexpected, "공식 토큰 수집 포트를 열지 못했습니다.", underlying: error).record()
                         self.listeningPort = nil
                         self.failureMessage = "공식 토큰 수집 포트를 열지 못했습니다. 로컬 포트 사용 상태를 확인해 주세요."
                         listener.cancel(); self.listener = nil
@@ -48,7 +49,10 @@ public final class ClaudeTelemetryServer: ObservableObject {
             }
             self.listener = listener
             listener.start(queue: .main)
-        } catch { failureMessage = "공식 토큰 수집기를 시작하지 못했습니다." }
+        } catch {
+            AppOperationFailure(.unexpected, "공식 토큰 수집기를 시작하지 못했습니다.", underlying: error).record()
+            failureMessage = "공식 토큰 수집기를 시작하지 못했습니다."
+        }
     }
 
     /// 현재 등록 경로와 이미 설치한 수집 경로만 연결
