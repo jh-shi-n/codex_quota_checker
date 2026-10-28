@@ -98,14 +98,14 @@ public struct ClaudeQuotaSnapshot: Codable, Equatable, Sendable {
     }
 }
 
-/// 인증 조회와 스냅샷 읽기만 수행하는 Claude 전용 서비스
+/// 공식 CLI 사용량 조회와 계정별 스냅샷 표시 서비스
 public struct ClaudeQuotaService: Sendable {
     public let cli: ClaudeCLI
 
     /// CLI 실행 경계의 주입
     public init(cli: ClaudeCLI = ClaudeCLI()) { self.cli = cli }
 
-    /// 메인 스레드 밖에서 인증·스냅샷 확인, 추론 요청 없음
+    /// 비용 없는 CLI 조회 후 스냅샷 반영 및 실패 시 마지막 확인값 표시
     public func state(for config: AccountConfig) async -> AccountState {
         guard config.isConfigured else { return .notConfigured(id: config.id) }
         do {
@@ -130,10 +130,8 @@ public struct ClaudeQuotaService: Sendable {
             state.email = authentication.email
             state.planType = authentication.subscriptionType
             guard authentication.supportsQuota else { throw ClaudeQuotaError.unsupportedAccount }
-            let repairMessage = "수집 실행파일을 찾지 못했습니다. 수집 연결을 해제한 뒤 현재 앱에서 다시 연결해 주세요."
-            let needsRepair = ClaudeStatusLineConnection.needsRepair(home: config.home)
             guard let snapshot = try ClaudeQuotaSnapshot.read(home: config.home), snapshot.identity == authentication.identity else {
-                state.errorMessage = needsRepair ? repairMessage : "로그인을 확인했습니다. ‘Claude 수집 연결’ 후 Claude CLI에서 대화하면 사용량이 갱신됩니다."
+                state.errorMessage = "로그인을 확인했습니다. 우상단 새로고침으로 Claude 사용량을 조회해 주세요."
                 return state
             }
             let windows = snapshot.windows.filter {
@@ -148,13 +146,12 @@ public struct ClaudeQuotaService: Sendable {
             state.secondaryResetAt = secondary?.resetsAt
             state.lastUpdated = windows.values.map(\.observedAt).min()
             if windows.isEmpty {
-                state.errorMessage = "초기화 이후 새 사용량을 기다리는 중입니다. Claude CLI에서 대화한 뒤 다시 확인해 주세요."
+                state.errorMessage = "초기화 이후 새 사용량을 확인하지 못했습니다. 우상단 새로고침으로 다시 조회해 주세요."
             } else if windows.values.contains(where: { now.timeIntervalSince($0.observedAt) > 900 }) {
-                state.errorMessage = "마지막으로 수신한 사용량입니다. Claude CLI 사용 시 갱신되며 웹·앱 사용이 아직 반영되지 않았을 수 있습니다."
+                state.errorMessage = "마지막으로 확인한 사용량입니다. 우상단 새로고침으로 현재 사용량을 다시 조회해 주세요."
             } else {
                 state.errorMessage = "공식 Claude /usage 조회로 확인한 계정 전체 사용량입니다. 새로고침 시 서버 사용량을 다시 확인합니다."
             }
-            if needsRepair { state.errorMessage = repairMessage + " 표시된 사용량은 마지막 수신값입니다." }
             state.primaryResetObservation = primary == nil ? .checking : .stableObserved
             state.secondaryResetObservation = secondary == nil ? .checking : .stableObserved
         } catch {

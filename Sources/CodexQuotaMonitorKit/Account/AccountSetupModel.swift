@@ -28,12 +28,8 @@ public final class AccountSetupModel: ObservableObject {
     @Published public private(set) var connectedAccount: AccountState?
     @Published public private(set) var discoveryMessage: String?
     @Published public private(set) var isRegistering = false
-    @Published public private(set) var collectionMessage: String?
-    /// 입력 폴더 제공자와 현재 수집 연결 상태
+    /// 입력 폴더의 CLI 제공자 판별
     public var detectedProvider: AccountProvider { .detect(home: URL(fileURLWithPath: validator.normalizedPath(path))) }
-    public var isClaudeCollectionInstalled: Bool {
-        detectedProvider == .claude && ClaudeStatusLineConnection.isInstalled(home: URL(fileURLWithPath: validator.normalizedPath(path)))
-    }
     public let isRecovery: Bool
 
     public var canCheck: Bool { !validator.normalizedPath(path).isEmpty && phase != .checking && !isRegistering }
@@ -106,27 +102,9 @@ public final class AccountSetupModel: ObservableObject {
         connectedAccount = account
         message = account.email.map { "\($0) 계정의 연결을 확인했습니다." } ?? "계정 연결을 확인했습니다."
         if account.provider == .claude, account.primaryUsedPercent == nil, account.secondaryUsedPercent == nil {
-            message = "Claude 로그인 확인 완료. 수집 연결 후 CLI에서 대화하면 할당량이 표시됩니다."
+            message = "Claude 로그인 확인 완료. 계정을 연결한 뒤 우상단 새로고침으로 사용량을 다시 조회할 수 있습니다."
         }
         phase = .connected
-    }
-
-    /// 인증 확인을 마친 폴더의 명시적 Claude 수집 연결·제거
-    public func setClaudeCollectionEnabled(_ enabled: Bool, appExecutable: URL? = Bundle.main.executableURL, cliExecutable: URL? = ClaudeCLI.locate()) {
-        guard canFinish, detectedProvider == .claude else { return }
-        let home = URL(fileURLWithPath: validator.normalizedPath(path))
-        do {
-            if enabled {
-                guard let appExecutable, let cliExecutable else { throw ClaudeQuotaError.cliMissing }
-                try ClaudeStatusLineConnection.install(home: home, appExecutable: appExecutable, cliExecutable: cliExecutable)
-                collectionMessage = "수집 연결을 설치했습니다. Claude CLI에서 대화한 뒤 연결 확인을 다시 누르면 사용량이 표시됩니다."
-            } else {
-                try ClaudeStatusLineConnection.remove(home: home)
-                collectionMessage = "기존 Claude 상태 표시줄을 복원했습니다."
-            }
-        } catch {
-            collectionMessage = (error as? ClaudeQuotaError)?.errorDescription ?? "Claude 수집 연결을 변경하지 못했습니다. 폴더 권한을 확인해 주세요."
-        }
     }
 
     /// 등록 직전 폴더 존재 여부 재확인; 저장은 앱 호스트에서만 수행
@@ -166,7 +144,6 @@ public final class AccountSetupModel: ObservableObject {
         registrationError = nil
         isRegistering = false
         phase = .idle
-        collectionMessage = nil
     }
 
     /// 인증·설치·네트워크 실패의 사용자 안내 변환

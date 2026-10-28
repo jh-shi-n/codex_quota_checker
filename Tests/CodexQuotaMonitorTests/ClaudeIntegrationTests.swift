@@ -70,23 +70,17 @@ final class ClaudeIntegrationTests: XCTestCase {
         XCTAssertEqual(AccountDetailView.statusText(for: AccountState(id: "C1", status: .normal, provider: .claude)), "사용량 대기")
     }
 
-    /// 실제 CLI 폴더의 인증·명시 수집 연결·앱 저장소·화면 렌더링 검증
+    /// 별도 수집 연결 없는 실제 CLI 조회·앱 저장소·화면 렌더링 검증
     func testLiveClaudeConnection() async throws {
-        guard let path = ProcessInfo.processInfo.environment["CLAUDE_QUOTA_LIVE_HOME"],
-              let executable = ProcessInfo.processInfo.environment["CLAUDE_QUOTA_LIVE_APP"] else {
-            throw XCTSkip("실계정 폴더·수집 앱 경로를 명시한 경우에만 실행")
+        guard let path = ProcessInfo.processInfo.environment["CLAUDE_QUOTA_LIVE_HOME"] else {
+            throw XCTSkip("실계정 폴더를 명시한 경우에만 실행")
         }
         let home = URL(fileURLWithPath: path)
-        let cli = try XCTUnwrap(ClaudeCLI.locate())
         let model = AccountSetupModel()
         model.path = home.path
         await model.checkConnection()
         XCTAssertEqual(model.connectedAccount?.provider, .claude)
         XCTAssertTrue(model.canFinish)
-        let wasInstalled = ClaudeStatusLineConnection.isInstalled(home: home)
-        model.setClaudeCollectionEnabled(true, appExecutable: URL(fileURLWithPath: executable), cliExecutable: cli)
-        XCTAssertTrue(model.isClaudeCollectionInstalled)
-        defer { if !wasInstalled { try? ClaudeStatusLineConnection.remove(home: home) } }
         let suite = "ClaudeLive-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }

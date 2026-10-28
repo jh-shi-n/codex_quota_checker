@@ -399,7 +399,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     homes: Self.configuredHomes(for: self.accountStore.configs)
                 )
             }
-            if let self { ClaudeTelemetryServer.shared.configure(self.accountStore.configs) }
             self?.quotaResetScheduler.reconcile(
                 states: states, reminderMinutes: preferences.resetReminderMinutes
             )

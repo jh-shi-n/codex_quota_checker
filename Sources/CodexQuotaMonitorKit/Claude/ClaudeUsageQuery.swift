@@ -19,7 +19,7 @@ public actor ClaudeUsageQuery {
         try await request.value
     }
 
-    /// 로컬 명령·0턴·비용 0 확인 후 동일 계정의 신규 조회값만 보관
+    /// 0턴·비용 0과 계정 일치 확인 후 신규 조회값 보관·이전 수집 설정 복원
     static func run(home: URL, cli: ClaudeCLI, timeout: TimeInterval = 18) throws {
         let authentication = try cli.authentication(home: home)
         guard authentication.supportsQuota else { throw ClaudeQuotaError.unsupportedAccount }
@@ -38,6 +38,7 @@ public actor ClaudeUsageQuery {
         try FileManager.default.createDirectory(at: ClaudeQuotaSnapshot.directory(home: home), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try JSONEncoder().encode(snapshot).write(to: ClaudeQuotaSnapshot.file(home: home), options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: ClaudeQuotaSnapshot.file(home: home).path)
+        ClaudeCollectionMigration.restoreLegacySettings(home: home)
     }
 
     /// 공식 명령의 알려진 표시 형식만 파싱하고 제한·오래된 값·형식 변경 거절

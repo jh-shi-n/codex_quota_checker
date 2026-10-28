@@ -63,15 +63,8 @@ public struct AccountSetupView: View {
                             .foregroundStyle(.secondary)
                         AccountPathHelpView()
                         if model.detectedProvider == .claude {
-                            Text("Claude 폴더: 연결 확인 후 수집 연결을 설치하면 기존 상태 표시줄을 유지하면서 사용량을 받습니다. 프로젝트별 상태 표시줄 설정이 우선하는 경우 일부 세션은 수집되지 않을 수 있습니다.")
+                            Text("계정을 연결하면 우상단 새로고침으로 할당량과 토큰 사용량을 조회합니다. 별도 수집 연결은 필요하지 않습니다.")
                                 .font(.caption).foregroundStyle(.secondary)
-                            Button(model.isClaudeCollectionInstalled ? "Claude 수집 연결 해제" : "Claude 수집 연결") {
-                                model.setClaudeCollectionEnabled(!model.isClaudeCollectionInstalled)
-                            }
-                            .disabled(!model.canFinish)
-                            if let message = model.collectionMessage {
-                                Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                            }
                         }
                     }
 

@@ -12,8 +12,6 @@ extension CodexQuotaMonitorAppDelegate {
             .version: .identifier(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"),
             .build: .identifier(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"),
         ])
-        ClaudeTelemetryServer.shared.start()
-        ClaudeTelemetryServer.shared.configure(accountStore.configs)
         appUpdates.check(force: false)
         DiagnosticLogContext.recordCLIVersion()
         installWakeObserver()
