@@ -5,7 +5,7 @@
 import Darwin
 import Foundation
 
-/// 대화·키 파일을 제외하고 살아 있는 Claude CLI 프로세스만 투영
+/// 제한된 모델 메타데이터와 살아 있는 Claude CLI 프로세스만 투영
 public struct ClaudeSessionActivityProvider: SessionActivityProvider {
     private let isAlive: @Sendable (Int32, String?) -> Bool
 
@@ -48,6 +48,8 @@ public struct ClaudeSessionActivityProvider: SessionActivityProvider {
                 let updated = (object["updatedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
                 let validUpdated = updated.flatMap { $0 <= now.addingTimeInterval(30) ? $0 : nil }
                 let metadata = ClaudeSessionMetadata.read(home: home, sessionID: id, now: now)
+                    .map { (model: $0.model, effort: $0.effort) }
+                    ?? ClaudeTranscriptMetadata.read(home: home, sessionID: id)
                 sessions.append(SessionActivityMainSession(threadID: id, source: .cli,
                     taskName: SessionActivityMetadataSanitizer.text(object["name"] as? String) ?? "Claude session",
                     status: status, agents: [], isActive: true, lastActivityAt: validUpdated,
