@@ -104,7 +104,7 @@ final class ClaudeQuotaTests: XCTestCase {
             XCTAssertEqual(state.primaryResetObservation, expired ? .checking : .stableObserved)
             XCTAssertEqual(state.lastUpdated, expired ? date : now)
             if expired {
-                XCTAssertEqual(state.errorMessage, "5시간 한도가 만료되어 새 한도를 확인 중입니다. 확인 전까지 잔여량 100%로 표시합니다.")
+                XCTAssertNil(state.errorMessage)
             }
         }
         let later = original.resetsAt.addingTimeInterval(10)
@@ -129,12 +129,12 @@ final class ClaudeQuotaTests: XCTestCase {
         try ClaudeQuotaSnapshot.capture(input: input(now: now), home: home, cli: cli, now: now)
         let stale = service.stateSync(for: config, now: now.addingTimeInterval(1000))
         XCTAssertEqual(stale.lastUpdated, now)
-        XCTAssertTrue(stale.errorMessage?.contains("마지막으로 확인한 사용량") == true)
+        XCTAssertNil(stale.errorMessage)
         let expired = service.stateSync(for: config, now: now.addingTimeInterval(100000))
         XCTAssertEqual(expired.primaryRemainingPercent, 100)
         XCTAssertNil(expired.secondaryUsedPercent)
         XCTAssertNil(expired.lastUpdated)
-        XCTAssertEqual(expired.errorMessage, "5시간 한도가 만료되어 새 한도를 확인 중입니다. 확인 전까지 잔여량 100%로 표시합니다.")
+        XCTAssertNil(expired.errorMessage)
         let future = service.stateSync(for: config, now: now.addingTimeInterval(-31))
         XCTAssertNil(future.primaryUsedPercent)
         XCTAssertNil(future.secondaryUsedPercent)

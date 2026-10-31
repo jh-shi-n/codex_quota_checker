@@ -120,7 +120,7 @@ public struct ClaudeQuotaService: Sendable {
                 case .cliMissing: state.status = .codexNotFound
                 default: state.status = .error
                 }
-                state.errorMessage = (error as? ClaudeQuotaError)?.errorDescription ?? "Claude 사용량 조회를 완료하지 못했습니다."
+                state.errorMessage = (error as? ClaudeQuotaError)?.errorDescription ?? "Claude - Usage query failed"
             }
             return state
         }
@@ -136,7 +136,7 @@ public struct ClaudeQuotaService: Sendable {
             state.planType = authentication.subscriptionType
             guard authentication.supportsQuota else { throw ClaudeQuotaError.unsupportedAccount }
             guard let snapshot = try ClaudeQuotaSnapshot.read(home: config.home), snapshot.identity == authentication.identity else {
-                state.errorMessage = "로그인을 확인했습니다. 우상단 새로고침으로 Claude 사용량을 조회해 주세요."
+                state.errorMessage = "Claude - Usage not queried"
                 return state
             }
             let windows = snapshot.windows.filter {
@@ -153,13 +153,7 @@ public struct ClaudeQuotaService: Sendable {
             state.secondaryResetAt = secondary?.resetsAt
             state.lastUpdated = active.values.map(\.observedAt).min()
             if active.isEmpty && !primaryReset {
-                state.errorMessage = "초기화 이후 새 사용량을 확인하지 못했습니다. 우상단 새로고침으로 다시 조회해 주세요."
-            } else if active.values.contains(where: { now.timeIntervalSince($0.observedAt) > 900 }) {
-                state.errorMessage = "마지막으로 확인한 사용량입니다. 우상단 새로고침으로 현재 사용량을 다시 조회해 주세요."
-            } else if primaryReset {
-                state.errorMessage = "5시간 한도가 만료되어 새 한도를 확인 중입니다. 확인 전까지 잔여량 100%로 표시합니다."
-            } else {
-                state.errorMessage = "공식 Claude /usage 조회로 확인한 계정 전체 사용량입니다. 새로고침 시 서버 사용량을 다시 확인합니다."
+                state.errorMessage = "Claude - Usage not refreshed after reset"
             }
             state.primaryResetObservation = primary == nil ? .checking : .stableObserved
             state.secondaryResetObservation = secondary == nil ? .checking : .stableObserved
@@ -170,7 +164,7 @@ public struct ClaudeQuotaService: Sendable {
             case .timeout: state.status = .timeout
             default: state.status = .error
             }
-            state.errorMessage = (error as? ClaudeQuotaError)?.errorDescription ?? "Claude CLI의 연결 상태를 확인하지 못했습니다."
+            state.errorMessage = (error as? ClaudeQuotaError)?.errorDescription ?? "Claude - CLI connection check failed"
         }
         return state
     }

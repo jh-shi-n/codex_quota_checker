@@ -75,7 +75,9 @@ public struct AccountDetailView: View {
                     Text(errorMessage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .help(errorMessage)
                 }
 
             }
@@ -204,7 +206,7 @@ public struct AccountDetailView: View {
                 .buttonStyle(.appAction)
                 .disabled(account.status == .notConfigured || account.isRefreshing || account.isResetVerificationPending || accountTokenUsageStore.isLoading(for: account))
                 .keyboardShortcut("r", modifiers: [.command])
-                .help(account.provider == .claude ? "공식 Claude /usage 명령으로 현재 사용량 조회" : "이 계정의 할당량과 토큰 사용량 새로고침")
+                .help(account.provider == .claude ? "이 계정의 할당량 새로고침" : "이 계정의 할당량과 토큰 사용량 새로고침")
                 .accessibilityLabel("계정 새로고침")
             }
 
@@ -292,7 +294,7 @@ public struct AccountDetailView: View {
     /// 계정 조회 상태의 상세 화면 표시명 변환
     public static func statusText(for account: AccountState) -> String {
         if account.provider == .claude {
-            if account.status == .codexNotFound { return "Claude not found" }
+            if account.status == .codexNotFound { return "Claude Cli를 찾을 수 없습니다." }
             if account.status == .normal && account.lastUpdated == nil { return "사용량 대기" }
             if account.status == .normal, let updated = account.lastUpdated, Date().timeIntervalSince(updated) > 900 { return "마지막 수신값" }
         }
@@ -303,19 +305,19 @@ public struct AccountDetailView: View {
     public static func statusText(for status: AccountStatus) -> String {
         switch status {
         case .notConfigured:
-            return "Not configured"
+            return "연결할 계정이 설정되지 않았습니다."
         case .normal:
-            return "Normal"
+            return "정상"
         case .loading:
-            return "Loading"
+            return "조회 중"
         case .loginRequired:
-            return "Login required"
+            return "로그인이 필요합니다."
         case .codexNotFound:
-            return "Codex not found"
+            return "Codex Cli를 찾을 수 없습니다."
         case .timeout:
-            return "Timed out"
+            return "시간 초과"
         case .error:
-            return "Error"
+            return "에러"
         }
     }
 

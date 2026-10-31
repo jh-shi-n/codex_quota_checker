@@ -55,7 +55,7 @@ final class ResetSchedulePresentationTests: XCTestCase {
         }
         XCTAssertEqual(AccountDashboardFormatting.resetScheduleStatusText(
             start, observation: .stableObserved, status: .normal, now: start
-        ), "초기화 시각 재확인 필요")
+        ), "재조회 필요 (초기화 시각 초과)")
     }
 
     /// 앱 재시작의 캐시 기본 관측 상태에서 일정 표시 차단

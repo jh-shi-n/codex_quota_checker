@@ -103,16 +103,16 @@ public enum AccountDashboardFormatting {
         _ resetAt: Date?, observation: ResetTimeObservation,
         status: AccountStatus, now: Date = Date(), provider: AccountProvider = .codex
     ) -> String {
-        guard [.normal, .loading].contains(status) else { return "초기화 시각 조회 미확인" }
-        guard let resetAt, resetAt.timeIntervalSince1970.isFinite else { return "초기화 시각 미확인" }
-        guard resetAt > now else { return "초기화 시각 재확인 필요" }
+        guard [.normal, .loading].contains(status) else { return "재조회 필요 (이외)" }
+        guard let resetAt, resetAt.timeIntervalSince1970.isFinite else { return "미확인" }
+        guard resetAt > now else { return "재조회 필요 (초기화 시각 초과)" }
         if provider == .claude {
-            return status == .loading ? "저장된 CLI 예정 시각 · 분 단위" : "CLI 제공 예정 시각 · 분 단위"
+            return status == .loading ? "조회 중" : "고정됨"
         }
         switch observation {
-        case .stableObserved: return "할당량 시간 고정"
-        case .movingObserved: return "초기화 시각 변동 중"
-        case .checking: return "초기화 시각 확인 중"
+        case .stableObserved: return "고정됨"
+        case .movingObserved: return "변동 중"
+        case .checking: return "조회 중"
         }
     }
 

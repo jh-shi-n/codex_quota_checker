@@ -21,20 +21,20 @@ extension CodexQuotaServiceError: LocalizedError {
     private var failureSummary: String {
         switch self {
         case .notConfigured:
-            return "Account not configured"
+            return "Codex - Account Not Configured"
         case .loginRequired:
-            return "Login required"
+            return "Codex - Login Required"
         case .codexNotFound:
-            return "Codex executable not found"
+            return "Codex - Codex cli not found"
         case .timeout:
-            return "Codex app-server timed out"
+            return "Codex - app-server timed out"
         case .cancelled:
-            return "Codex app-server request was cancelled"
+            return "Codex - app-server request was cancelled"
         case let .processCrashed(status):
-            if let status { return "Codex app-server exited with status \(status)" }
-            return "Codex app-server exited unexpectedly"
+            if let status { return "Codex - app-server exited with status \(status)" }
+            return "Codex - app-server exited unexpectedly"
         case .malformedResponse:
-            return "Codex 응답을 해석하지 못했습니다."
+            return "Codex - Internal Error"
         case .protocolError:
             return "Codex 요청 처리에 실패했습니다."
         case .transport:

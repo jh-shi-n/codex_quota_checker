@@ -39,8 +39,8 @@ public struct AccountQuotaSection: View {
                         now: context.date
                     )
                     quotaCard(
-                        title: account.provider == .claude ? "주간 할당량" : "전체 할당량",
-                        subtitle: account.provider == .claude ? "Weekly quota" : "Overall quota",
+                        title: "주간 할당량",
+                        subtitle: "Weekly quota",
                         remaining: account.overallRemainingPercent,
                         resetAt: account.secondaryResetAt,
                         observation: account.secondaryResetObservation,
@@ -96,7 +96,7 @@ public struct AccountQuotaSection: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Text(isVerificationPending ? "초기화 시각 재확인 중" : AccountDashboardFormatting.resetScheduleStatusText(
+            Text(isVerificationPending ? "조회 중" : AccountDashboardFormatting.resetScheduleStatusText(
                 resetAt, observation: observation, status: account.status, now: now, provider: account.provider
             ))
                 .font(.caption2)
