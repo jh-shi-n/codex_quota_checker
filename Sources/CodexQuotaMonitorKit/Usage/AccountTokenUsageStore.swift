@@ -12,6 +12,9 @@ public final class AccountTokenUsageStore: ObservableObject {
     public var loader: Loader = { _ in .failure(.notConfigured) }
     public typealias LocalTodayLoader = @MainActor (AccountState) async -> TokenUsageSnapshot?
     public var localTodayLoader: LocalTodayLoader = { _ in nil }
+    /// 로그인·추가 소스 변경 시 이전 로컬 보완값 표시 차단
+    public var localTodayIdentity: @MainActor (AccountState) -> String? = { _ in nil }
+    private var localIdentities: [Key: String] = [:]
 
     private struct Key: Hashable {
         let id: String
@@ -123,7 +126,8 @@ public final class AccountTokenUsageStore: ObservableObject {
     }
     /// 서버 캐시에 합치지 않는 현재 계정의 당일 로컬 보완값
     public func localTodaySnapshot(for account: AccountState) -> TokenUsageSnapshot? {
-        guard let snapshot = localSnapshots[Key(account)],
+        guard localIdentities[Key(account)] == (localTodayIdentity(account) ?? ""),
+              let snapshot = localSnapshots[Key(account)],
               AccountTokenUsage.reportingCalendar.isDate(snapshot.generatedAt, inSameDayAs: now()) else { return nil }
         return snapshot
     }
@@ -161,10 +165,13 @@ public final class AccountTokenUsageStore: ObservableObject {
             if snapshots[key]?.days?.contains(where: { $0.date == today }) == true {
                 localSnapshots[key] = nil
             } else {
+                let identity = localTodayIdentity(account) ?? ""
                 let local = await localTodayLoader(account)
                 guard !Task.isCancelled, operations[key]?.id == id else { return }
-                if let local, local.availability == .available,
+                if identity != (localTodayIdentity(account) ?? "") { localSnapshots[key] = nil }
+                if let local, identity == (localTodayIdentity(account) ?? ""), local.availability == .available,
                    AccountTokenUsage.reportingCalendar.isDate(local.generatedAt, inSameDayAs: now()) {
+                    localIdentities[key] = identity
                     localSnapshots[key] = local
                 }
             }
@@ -183,6 +190,7 @@ public final class AccountTokenUsageStore: ObservableObject {
         }
         snapshots = snapshots.filter { $0.key.id != accountID }
         localSnapshots = localSnapshots.filter { $0.key.id != accountID }
+        localIdentities = localIdentities.filter { $0.key.id != accountID }
         failures = failures.filter { $0.id != accountID }
         attemptedAt = attemptedAt.filter { $0.key.id != accountID }
         if let home = homes[accountID] {
@@ -198,7 +206,7 @@ public final class AccountTokenUsageStore: ObservableObject {
         persistenceGeneration += 1
         for operation in operations.values { operation.task.cancel() }
         operations.removeAll(); snapshots.removeAll(); failures.removeAll(); attemptedAt.removeAll()
-        localSnapshots.removeAll()
+        localSnapshots.removeAll(); localIdentities.removeAll()
         persistedSnapshots.removeAll(); loadedHomes.removeAll(); loadingHomes.removeAll(); currentAccounts.removeAll()
     }
 }

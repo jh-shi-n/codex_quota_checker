@@ -59,6 +59,7 @@ public actor SessionActivityMonitor {
     public private(set) var currentSnapshots: [String: SessionActivitySnapshot] = [:]
     public private(set) var isRunning = false
 
+    private let sharedHomeResolver: SharedCodexHomeResolver
     private let provider: any SessionActivityProvider
     private let pollInterval: TimeInterval
     private let sleep: @Sendable (TimeInterval) async -> Void
@@ -95,8 +96,10 @@ public actor SessionActivityMonitor {
             try? await Task.sleep(nanoseconds: nanoseconds)
         },
         now: @escaping @Sendable () -> Date = { Date() },
-        onTransition: @escaping SessionActivityTransitionHandler = { _ in }
+        onTransition: @escaping SessionActivityTransitionHandler = { _ in },
+        sharedHomeResolver: SharedCodexHomeResolver = SharedCodexHomeResolver()
     ) {
+        self.sharedHomeResolver = sharedHomeResolver
         self.accounts = Self.normalizedAccounts(accounts)
         self.provider = provider
         self.pollInterval = max(0, pollInterval)
@@ -244,16 +247,15 @@ public actor SessionActivityMonitor {
         generation: Int
     ) async {
         let provider = self.provider
+        let resolver = sharedHomeResolver
         let polledAt = now()
         var results: [PollResult] = []
         await withTaskGroup(of: PollResult.self) { group in
             for account in accounts {
                 guard account.isConfigured else { continue }
                 group.addTask {
-                    let snapshot = await provider.snapshot(
-                        accountID: account.id,
-                        home: account.home
-                    )
+                    let snapshot = await SharedCodexSessionActivity.snapshot(
+                        account: account, accounts: accounts, provider: provider, resolver: resolver)
                     return PollResult(account: account, snapshot: snapshot)
                 }
             }

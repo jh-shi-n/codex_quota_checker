@@ -23,6 +23,7 @@ public actor TokenUsageSnapshotCache {
     /// 정리 실패의 호출자 조회 경계; 다음 주기의 성공 시 해제
     public var hasCleanupFailure: Bool { persistence?.hasCleanupFailure ?? false }
 
+    private let sharedHomeResolver: SharedCodexHomeResolver
     private let provider: any TokenUsageProvider
     private let todayProvider: (any TokenUsageTodayProvider)?
     private var automaticRefreshes: Set<String> = []
@@ -56,8 +57,10 @@ public actor TokenUsageSnapshotCache {
         calendar: Calendar = .autoupdatingCurrent,
         historyDatabaseURL: URL? = nil,
         retentionMonths: Int = 12,
-        todayProvider: (any TokenUsageTodayProvider)? = nil
+        todayProvider: (any TokenUsageTodayProvider)? = nil,
+        sharedHomeResolver: SharedCodexHomeResolver = SharedCodexHomeResolver()
     ) {
+        self.sharedHomeResolver = sharedHomeResolver
         self.provider = provider
         self.todayProvider = todayProvider
         self.invalidationState = InvalidationState()
@@ -74,7 +77,7 @@ public actor TokenUsageSnapshotCache {
         let referenceDate = now()
         purgeExpired(at: referenceDate)
         let token = invalidationState.current(for: accountID)
-        let expectedIdentity = accountHomes[accountID].map(Self.homeIdentity)
+        let expectedIdentity = accountHomes[accountID].map(self.sourceIdentity)
 
         if let entry = snapshots[accountID],
            entry.token == token,
@@ -137,7 +140,7 @@ public actor TokenUsageSnapshotCache {
             snapshot: snapshot,
             updatedAt: completedAt,
             expiresAt: completedAt.addingTimeInterval(Self.snapshotLifetime),
-            homeIdentity: accountHomes[accountID].map(Self.homeIdentity)
+            homeIdentity: accountHomes[accountID].map(self.sourceIdentity)
         )
     }
 
@@ -145,10 +148,10 @@ public actor TokenUsageSnapshotCache {
     public func refresh(accountID: String, home: URL) async -> TokenUsageSnapshot {
         manualRefreshes[accountID, default: 0] += 1
         defer { manualRefreshes[accountID, default: 1] -= 1 }
-        let homeIdentity = Self.homeIdentity(home)
+        let homeIdentity = self.sourceIdentity(home)
 
         if let configuredHome = accountHomes[accountID],
-           Self.homeIdentity(configuredHome) != homeIdentity {
+           self.sourceIdentity(configuredHome) != homeIdentity {
             return await provider.snapshot(home: home)
         }
 
@@ -176,12 +179,19 @@ public actor TokenUsageSnapshotCache {
 
         let policyRevision = historyPolicyRevision
         var snapshot: TokenUsageSnapshot
-        if history != nil, let ranged = provider as? any TokenUsageRangeProvider {
+        if let local = provider as? LocalTokenUsageProvider {
+            let cutoff = historyOptions.cutoff(at: requestDate, calendar: calendar)
+            let count = history == nil ? TokenUsageSnapshot.historyDayCount
+                : (calendar.dateComponents([.day], from: cutoff, to: calendar.startOfDay(for: requestDate)).day ?? 0) + 1
+            snapshot = await LocalTokenUsageProvider(calendar: local.calendar, now: { requestDate },
+                maxFileCount: local.maxFileCount, maxLineBytes: local.maxLineBytes, maxReadBytes: local.maxReadBytes,
+                historyDayCount: count).snapshot(homes: sourceHomes(home))
+        } else if history != nil, let ranged = provider as? any TokenUsageRangeProvider {
             let cutoff = historyOptions.cutoff(at: requestDate, calendar: calendar)
             let count = (calendar.dateComponents([.day], from: cutoff, to: calendar.startOfDay(for: requestDate)).day ?? 0) + 1
             snapshot = await ranged.snapshot(home: home, historyDayCount: count)
         } else { snapshot = await provider.snapshot(home: home) }
-        guard policyRevision == historyPolicyRevision else {
+        guard homeIdentity == sourceIdentity(home), policyRevision == historyPolicyRevision else {
             return cachedSnapshot(for: accountID) ?? Self.supersededSnapshot(generatedAt: now())
         }
         guard invalidationState.current(for: accountID) == token else {
@@ -255,15 +265,20 @@ public actor TokenUsageSnapshotCache {
         guard let todayProvider, !Task.isCancelled,
               manualRefreshes[accountID, default: 0] == 0,
               !automaticRefreshes.contains(accountID),
-              accountHomes[accountID].map(Self.homeIdentity) == Self.homeIdentity(home)
+              accountHomes[accountID].map(self.sourceIdentity) == self.sourceIdentity(home)
         else { return cachedSnapshot(for: accountID) }
         automaticRefreshes.insert(accountID)
         defer { automaticRefreshes.remove(accountID) }
         let token = invalidationState.current(for: accountID)
+        let identity = sourceIdentity(home)
         let policy = historyPolicyRevision
-        guard let collected = await todayProvider.todaySnapshot(home: home),
+        let collected: TokenUsageSnapshot?
+        if let local = todayProvider as? TodayTokenUsageProvider {
+            collected = await local.todaySnapshot(homes: sourceHomes(home))
+        } else { collected = await todayProvider.todaySnapshot(home: home) }
+        guard let collected,
               collected.availability == .available, !Task.isCancelled,
-              token == invalidationState.current(for: accountID), policy == historyPolicyRevision,
+              identity == sourceIdentity(home), token == invalidationState.current(for: accountID), policy == historyPolicyRevision,
               calendar.isDate(collected.generatedAt, inSameDayAs: now())
         else { return cachedSnapshot(for: accountID) }
         let previous = cachedSnapshot(for: accountID)
@@ -287,7 +302,7 @@ public actor TokenUsageSnapshotCache {
             today: combined.today, last7Days: combined.last7Days, last30Days: combined.last30Days,
             totalSessions: combined.totalSessions, averageTokensPerSession: combined.averageTokensPerSession,
             recordedDates: coverage)
-        let saved = commitSnapshot(source, accountID: accountID, homeIdentity: Self.homeIdentity(home), token: token)
+        let saved = commitSnapshot(source, accountID: accountID, homeIdentity: self.sourceIdentity(home), token: token)
         return saved.availability == .available ? saved : previous
     }
 
@@ -383,6 +398,26 @@ public actor TokenUsageSnapshotCache {
         snapshots = snapshots.filter { _, entry in
             entry.token.generation >= generation
         }
+    }
+
+    /// 현재 슬롯 목록의 공유 홈 귀속 판정 구성
+    private var sourceAccounts: [AccountConfig] {
+        accountHomes.sorted { $0.key < $1.key }.map { AccountConfig(id: $0.key, home: $0.value, position: .left) }
+    }
+
+    /// 등록 홈에만 유일하게 인증된 공유 소스 추가
+    private func sourceHomes(_ home: URL) -> [URL] {
+        let accounts = sourceAccounts
+        guard let account = accounts.first(where: { Self.homeIdentity($0.home) == Self.homeIdentity(home) }) else { return [home] }
+        return sharedHomeResolver.homes(for: account, accounts: accounts)
+    }
+
+    /// 인증·추가 소스 변경 전후의 메모리·영속 캐시 격리 키
+    private func sourceIdentity(_ home: URL) -> String {
+        let accounts = sourceAccounts
+        guard let account = accounts.first(where: { Self.homeIdentity($0.home) == Self.homeIdentity(home) }),
+              account.provider == .codex else { return Self.homeIdentity(home) }
+        return Self.homeIdentity(home) + "#" + sharedHomeResolver.signature(for: account, accounts: accounts)
     }
 
     /// 계정 홈 URL의 경로 정규화

@@ -331,14 +331,21 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             return result
         }
 
+        AccountTokenUsageStore.shared.localTodayIdentity = { [weak self] account in
+            guard let self, let config = self.accountStore.configs.first(where: { $0.id == account.id }) else { return nil }
+            return SharedCodexHomeResolver().signature(for: config, accounts: self.accountStore.configs)
+        }
         AccountTokenUsageStore.shared.localTodayLoader = { [weak self] account in
             guard let self,
                   let config = self.accountStore.configs.first(where: { $0.id == account.id }), config.provider == .codex,
-                  let home = config.configuredHome,
+                  config.configuredHome != nil,
                   self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
                   self.accountStore.state(for: account.id)?.email == account.email else { return nil }
+            let configs = self.accountStore.configs
+            let resolver = SharedCodexHomeResolver()
+            let signature = resolver.signature(for: config, accounts: configs)
             let task = Task.detached(priority: .utility) {
-                await LocalTokenUsageProvider(calendar: AccountTokenUsage.reportingCalendar, historyDayCount: 1).snapshot(home: home)
+                await LocalTokenUsageProvider(calendar: AccountTokenUsage.reportingCalendar, historyDayCount: 1).snapshot(homes: resolver.homes(for: config, accounts: configs))
             }
             let snapshot = await withTaskCancellationHandler {
                 await task.value
@@ -348,6 +355,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             guard self.accountStore.configs.first(where: { $0.id == account.id }) == config,
                   self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
                   self.accountStore.state(for: account.id)?.email == account.email else { return nil }
+            guard signature == resolver.signature(for: config, accounts: self.accountStore.configs) else { return nil }
             return snapshot
         }
 
@@ -462,10 +470,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadSessionActivity(_ account: AccountState) async -> SessionActivitySnapshot {
-        guard let home = accountStore.configs.first(where: { $0.id == account.id })?.configuredHome else {
+        guard let config = accountStore.configs.first(where: { $0.id == account.id }), config.isConfigured else {
             return .unavailable(accountID: account.id)
         }
-        return await sessionActivityProvider.snapshot(accountID: account.id, home: home)
+        return await SharedCodexSessionActivity.snapshot(account: config, accounts: accountStore.configs, provider: sessionActivityProvider)
     }
 
     /// 확인한 계정 설정으로 리셋권 사용 후 서버 한도·잔여 개수 재조회

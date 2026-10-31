@@ -51,6 +51,22 @@ public actor TodayTokenUsageProvider: TokenUsageTodayProvider {
 
     /// 준비가 끝난 전체 당일 합계만 반환, 초기 큰 파일은 여러 주기에 나눠 수집
     public func todaySnapshot(home: URL) async -> TokenUsageSnapshot? {
+        await todaySnapshot(homes: [home])
+    }
+
+    /// 홈별 증분 커서를 보존하며 동일 세션·파일의 당일 합계 중복 제거
+    public func todaySnapshot(homes sourceHomes: [URL]) async -> TokenUsageSnapshot? {
+        var seen = LocalSessionDeduplicator()
+        var combined: [TokenUsageDailyPoint] = []
+        for home in sourceHomes {
+            guard let result = await collect(home: home, seen: &seen) else { return nil }
+            combined.append(contentsOf: result.dailyPoints)
+        }
+        return TokenUsageAggregator(calendar: calendar, dayCount: 1).aggregate(dailyPoints: combined, generatedAt: now())
+    }
+
+    /// 단일 홈의 기존 상한을 적용한 수집 및 중복 없는 숫자 반환
+    private func collect(home: URL, seen: inout LocalSessionDeduplicator) async -> TokenUsageSnapshot? {
         lastReadBytes = 0
         let reference = now()
         let root = home.standardizedFileURL.resolvingSymlinksInPath()
@@ -89,7 +105,9 @@ public actor TodayTokenUsageProvider: TokenUsageTodayProvider {
                 cursor.state.byDay = cursor.state.byDay.filter { $0.key >= today }
                 state.files[url] = cursor
                 complete = complete && finished
-                points.append(contentsOf: cursor.state.points.filter { calendar.isDate($0.date, inSameDayAs: reference) })
+                if seen.insert(file: url), seen.insert(sessionID: cursor.state.sessionID) {
+                    points.append(contentsOf: cursor.state.points.filter { calendar.isDate($0.date, inSameDayAs: reference) })
+                }
             }
             homes[root] = state
             guard complete, !Task.isCancelled else { return nil }

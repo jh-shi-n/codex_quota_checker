@@ -48,60 +48,68 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
 
     /// 명시한 범위의 로컬 세션 집계와 완전한 성공 결과 반환
     public func snapshot(home: URL) async -> TokenUsageSnapshot {
-        let generatedAt = now()
-        guard !Task.isCancelled else {
-            return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: .cancelled)
-        }
-        guard home.isFileURL else {
-            return aggregator.emptySnapshot(
-                generatedAt: generatedAt,
-                availability: .unavailable,
-                error: .invalidHome
-            )
-        }
+        await snapshot(homes: [home])
+    }
 
-        let sessionsURL = home.standardizedFileURL.appendingPathComponent(
-            "sessions",
-            isDirectory: true
-        )
-        let fileManager = FileManager.default
-        var isDirectory = ObjCBool(false)
-        guard fileManager.fileExists(atPath: sessionsURL.path, isDirectory: &isDirectory) else {
-            // A newly configured CODEX_HOME has no sessions directory yet.
-            return aggregator.emptySnapshot(generatedAt: generatedAt)
-        }
-        guard isDirectory.boolValue,
-              fileManager.isReadableFile(atPath: sessionsURL.path) else {
-            return aggregator.emptySnapshot(
-                generatedAt: generatedAt,
-                availability: .unavailable,
-                error: .sessionsDirectoryUnavailable
-            )
-        }
-
-        let scan = rolloutCandidates(
-            in: sessionsURL,
-            referenceDate: generatedAt,
-            fileManager: fileManager
-        )
-        if let error = scan.error {
-            return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: error)
-        }
+    /// 홈별 기존 읽기 상한을 유지하며 세션·파일 중복을 제거한 합산
+    public func snapshot(homes: [URL]) async -> TokenUsageSnapshot {
         var dailyPoints: [TokenUsageDailyPoint] = []
-        var remainingBytes = maxReadBytes
-        do {
-            for candidate in scan.files {
-                try Task.checkCancellation()
-                let parsed = try parseRollout(candidate, fileManager: fileManager, remainingBytes: &remainingBytes)
-                dailyPoints.append(contentsOf: parsed)
+        var seen = LocalSessionDeduplicator()
+        let generatedAt = now()
+        for home in homes {
+            guard !Task.isCancelled else {
+                return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: .cancelled)
             }
-            try Task.checkCancellation()
-        } catch {
-            let failure: TokenUsageSnapshotError = error is CancellationError ? .cancelled
-                : (error as? RolloutReadError == .byteLimitExceeded ? .readLimitExceeded : .rolloutReadFailed)
-            return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: failure)
-        }
+            guard home.isFileURL else {
+                return aggregator.emptySnapshot(
+                    generatedAt: generatedAt,
+                    availability: .unavailable,
+                    error: .invalidHome
+                )
+            }
 
+            let sessionsURL = home.standardizedFileURL.appendingPathComponent(
+                "sessions",
+                isDirectory: true
+            ).resolvingSymlinksInPath()
+            let fileManager = FileManager.default
+            var isDirectory = ObjCBool(false)
+            guard fileManager.fileExists(atPath: sessionsURL.path, isDirectory: &isDirectory) else {
+                // 새 홈의 세션 부재는 다른 소스의 집계를 중단하지 않는 조건
+                continue
+            }
+            guard isDirectory.boolValue,
+                  fileManager.isReadableFile(atPath: sessionsURL.path) else {
+                return aggregator.emptySnapshot(
+                    generatedAt: generatedAt,
+                    availability: .unavailable,
+                    error: .sessionsDirectoryUnavailable
+                )
+            }
+
+            let scan = rolloutCandidates(
+                in: sessionsURL,
+                referenceDate: generatedAt,
+                fileManager: fileManager
+            )
+            if let error = scan.error {
+                return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: error)
+            }
+            var remainingBytes = maxReadBytes
+            do {
+                for candidate in scan.files {
+                    try Task.checkCancellation()
+                    guard seen.insert(file: candidate.url) else { continue }
+                    let parsed = try parseRollout(candidate, fileManager: fileManager, remainingBytes: &remainingBytes)
+                    if seen.insert(sessionID: parsed.sessionID) { dailyPoints.append(contentsOf: parsed.points) }
+                }
+                try Task.checkCancellation()
+            } catch {
+                let failure: TokenUsageSnapshotError = error is CancellationError ? .cancelled
+                    : (error as? RolloutReadError == .byteLimitExceeded ? .readLimitExceeded : .rolloutReadFailed)
+                return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: failure)
+            }
+        }
         return aggregator.aggregate(dailyPoints: dailyPoints, generatedAt: generatedAt)
     }
 
@@ -187,13 +195,13 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
         _ candidate: RolloutCandidate,
         fileManager: FileManager,
         remainingBytes: inout Int
-    ) throws -> [TokenUsageDailyPoint] {
+    ) throws -> TokenRolloutAccumulator {
         guard fileManager.isReadableFile(atPath: candidate.url.path) else { throw CocoaError(.fileReadNoPermission) }
         var state = TokenRolloutAccumulator()
         try readJSONLines(at: candidate.url, remainingBytes: &remainingBytes) { line in
             accumulate(line, state: &state, directoryDate: candidate.directoryDate)
         }
-        return state.points
+        return state
     }
 
     /// 전체 집계와 증분 집계가 공유하는 누적 카운터 증가분 계산
@@ -204,6 +212,8 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
         ), let root = object as? [String: Any] else {
             return
         }
+        if root["type"] as? String == "session_meta", let payload = root["payload"] as? [String: Any],
+           let id = payload["id"] as? String, !id.isEmpty { state.sessionID = id }
         let eventDate = timestamp(in: root)
         if state.safeDate == nil { state.safeDate = eventDate }
         guard isTokenCountEvent(root),
@@ -475,6 +485,7 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
 
 /// 원문을 보관하지 않는 파일별 누적 토큰·날짜 상태
 struct TokenRolloutAccumulator: Sendable {
+    var sessionID: String?
     var safeDate: Date?
     var highestTotals = TokenUsageTotals.zero
     var byDay: [Date: TokenUsageTotals] = [:]
