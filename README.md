@@ -2,8 +2,8 @@
 
 **KOR** | [ENG](README.en.md)
 
-- macOS 메뉴 막대·노치에서 최대 4개 Codex 계정의 할당량과 사용량 확인
-- Codex로 제작한 비공식 독립 앱
+- macOS 메뉴 막대·노치에서 최대 4개 슬롯의 Codex 및 Claude 계정 할당량, 세션 실행 기록, 토큰 사용량 확인
+- Codex/Claude로 제작한 비공식 독립 앱
 
 ## 화면 미리보기
 
