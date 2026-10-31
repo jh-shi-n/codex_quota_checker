@@ -1,9 +1,14 @@
+// 목적: 제공자별 할당량 비율·초기화 예정 시각 표시
+// 이용처: 계정 상세의 5시간·주간 할당량 카드
+// 사용방법: AccountQuotaSection(account:) 구성
+// 실행 예시: AccountQuotaSection(account: state)
 import SwiftUI
 
-/// The two quota windows shown near the top of the account dashboard.
+/// 제공자별 예정 시각 표시 기준을 적용한 두 할당량 카드
 public struct AccountQuotaSection: View {
     public let account: AccountState
 
+    /// 현재 계정의 할당량·예정 시각 스냅샷 연결
     public init(account: AccountState) {
         self.account = account
     }
@@ -47,7 +52,7 @@ public struct AccountQuotaSection: View {
         }
     }
 
-    /// 고정 관측된 미래 시각만 날짜·카운트다운 표시
+    /// 제공자별 확인 기준을 통과한 미래 예정 시각의 날짜·카운트다운 표시
     @ViewBuilder
     private func quotaCard(
         title: String,
@@ -59,7 +64,7 @@ public struct AccountQuotaSection: View {
         now: Date
     ) -> some View {
         let displayedReset = AccountDashboardFormatting.observedResetDate(
-            resetAt, observation: observation, status: account.status, now: now
+            resetAt, observation: observation, status: account.status, now: now, provider: account.provider
         )
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
@@ -92,7 +97,7 @@ public struct AccountQuotaSection: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             Text(isVerificationPending ? "초기화 시각 재확인 중" : AccountDashboardFormatting.resetScheduleStatusText(
-                resetAt, observation: observation, status: account.status, now: now
+                resetAt, observation: observation, status: account.status, now: now, provider: account.provider
             ))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
