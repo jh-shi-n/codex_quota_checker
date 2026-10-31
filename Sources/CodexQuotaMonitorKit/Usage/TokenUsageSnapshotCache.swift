@@ -88,10 +88,11 @@ public actor TokenUsageSnapshotCache {
         }
         snapshots.removeValue(forKey: accountID)
 
-        if let history, let expectedIdentity {
+        if let history, let home = accountHomes[accountID] {
             do {
                 if let archived = try invalidationState.optionalValueIfCurrent(token, accountID: accountID, {
-                    try history.load(accountID: accountID, homeIdentity: expectedIdentity,
+                    try history.load(accountID: accountID, homeIdentity: Self.homeIdentity(home),
+                        accountIdentity: self.historyAccountIdentity(home),
                         options: historyOptions, now: referenceDate, calendar: calendar)
                 }) {
                     historyError = nil
@@ -113,10 +114,11 @@ public actor TokenUsageSnapshotCache {
         }
 
         let restored: TokenUsageSnapshot
-        if let history {
+        if let history, let home = accountHomes[accountID] {
             do {
                 restored = try invalidationState.valueIfCurrent(token, accountID: accountID) {
-                    try history.merge(snapshot, accountID: accountID, homeIdentity: expectedIdentity,
+                    try history.merge(snapshot, accountID: accountID, homeIdentity: Self.homeIdentity(home),
+                        accountIdentity: self.historyAccountIdentity(home),
                         options: historyOptions, now: referenceDate, calendar: calendar)
                 } ?? snapshot
             } catch { historyError = "기존 토큰 캐시를 일별 집계로 이관하지 못했습니다."; return nil }
@@ -202,17 +204,18 @@ public actor TokenUsageSnapshotCache {
             return snapshot
         }
 
-        return commitSnapshot(snapshot, accountID: accountID, homeIdentity: homeIdentity, token: token)
+        return commitSnapshot(snapshot, accountID: accountID, home: home, token: token)
     }
 
     /// 검증된 전체·당일 집계의 공통 저장 경계
-    private func commitSnapshot(_ initial: TokenUsageSnapshot, accountID: String, homeIdentity: String,
+    private func commitSnapshot(_ initial: TokenUsageSnapshot, accountID: String, home: URL,
                                 token: InvalidationState.Token) -> TokenUsageSnapshot {
         var snapshot = initial
         if let history {
             do {
                 guard let archived = try invalidationState.valueIfCurrent(token, accountID: accountID, {
-                    try history.merge(snapshot, accountID: accountID, homeIdentity: homeIdentity,
+                    try history.merge(snapshot, accountID: accountID, homeIdentity: Self.homeIdentity(home),
+                        accountIdentity: self.historyAccountIdentity(home),
                         options: historyOptions, now: now(), calendar: calendar)
                 }) else { return cachedSnapshot(for: accountID) ?? Self.supersededSnapshot(generatedAt: now()) }
                 snapshot = archived
@@ -238,7 +241,7 @@ public actor TokenUsageSnapshotCache {
             return persistence.save(
                 payload: payload,
                 accountID: accountID,
-                homeIdentity: homeIdentity,
+                homeIdentity: sourceIdentity(home),
                 updatedAt: completedAt,
                 expiresAt: expiresAt
             )
@@ -255,7 +258,7 @@ public actor TokenUsageSnapshotCache {
             snapshot: snapshot,
             updatedAt: completedAt,
             expiresAt: expiresAt,
-            homeIdentity: homeIdentity
+            homeIdentity: sourceIdentity(home)
         )
         return snapshot
     }
@@ -302,7 +305,7 @@ public actor TokenUsageSnapshotCache {
             today: combined.today, last7Days: combined.last7Days, last30Days: combined.last30Days,
             totalSessions: combined.totalSessions, averageTokensPerSession: combined.averageTokensPerSession,
             recordedDates: coverage)
-        let saved = commitSnapshot(source, accountID: accountID, homeIdentity: self.sourceIdentity(home), token: token)
+        let saved = commitSnapshot(source, accountID: accountID, home: home, token: token)
         return saved.availability == .available ? saved : previous
     }
 
@@ -410,6 +413,13 @@ public actor TokenUsageSnapshotCache {
         let accounts = sourceAccounts
         guard let account = accounts.first(where: { Self.homeIdentity($0.home) == Self.homeIdentity(home) }) else { return [home] }
         return sharedHomeResolver.homes(for: account, accounts: accounts)
+    }
+
+    /// 공유 소스 변경과 분리된 기본 홈 계정 소유권 키
+    private func historyAccountIdentity(_ home: URL) -> String? {
+        let identity = Self.homeIdentity(home)
+        guard let account = sourceAccounts.first(where: { Self.homeIdentity($0.home) == identity }) else { return nil }
+        return sharedHomeResolver.accountIdentity(for: account)
     }
 
     /// 인증·추가 소스 변경 전후의 메모리·영속 캐시 격리 키

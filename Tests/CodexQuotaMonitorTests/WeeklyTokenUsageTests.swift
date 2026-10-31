@@ -3,6 +3,7 @@
 // 사용방법: swift test --filter WeeklyTokenUsageTests
 import AppKit
 import Foundation
+import SQLite3
 import SwiftUI
 import XCTest
 @testable import CodexQuotaMonitorKit
@@ -51,6 +52,109 @@ final class WeeklyTokenUsageTests: XCTestCase {
         XCTAssertEqual(restored.generatedAt, now)
         XCTAssertEqual(restored.dailyPoints.first { $0.date == now }?.inputTokens, 25)
         XCTAssertEqual(restored.today.inputTokens, 0)
+    }
+
+    /// 구형 정규화 경로 데이터베이스를 이관하고 원본 부재·재시작 후 보존 검증
+    func testLegacyPathHistoryMigratesAndSurvivesRefreshAndRestart() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("account")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let historyURL = root.appendingPathComponent("history.sqlite")
+        let now = date(2026, 10, 23)
+        do {
+            var pointer: OpaquePointer?
+            guard sqlite3_open_v2(historyURL.path, &pointer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
+                  let db = pointer else { throw CocoaError(.fileWriteUnknown) }
+            defer { sqlite3_close(db) }
+            let legacySchema = """
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE token_history_accounts (
+                account_id TEXT PRIMARY KEY, home_identity TEXT NOT NULL, updated_at REAL NOT NULL
+            ) WITHOUT ROWID;
+            CREATE TABLE token_daily_history (
+                account_id TEXT NOT NULL REFERENCES token_history_accounts(account_id) ON DELETE CASCADE,
+                day TEXT NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER, session_count INTEGER NOT NULL, updated_at REAL NOT NULL,
+                PRIMARY KEY (account_id, day)
+            ) WITHOUT ROWID;
+            """
+            guard sqlite3_exec(db, legacySchema, nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            var accountStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "INSERT INTO token_history_accounts VALUES (?, ?, ?)", -1,
+                                     &accountStatement, nil) == SQLITE_OK,
+                  let accountStatement else { throw CocoaError(.fileWriteUnknown) }
+            defer { sqlite3_finalize(accountStatement) }
+            guard "C1".withCString({ sqlite3_bind_text(accountStatement, 1, $0, -1, transient) }) == SQLITE_OK,
+                  home.path.withCString({ sqlite3_bind_text(accountStatement, 2, $0, -1, transient) }) == SQLITE_OK,
+                  sqlite3_bind_double(accountStatement, 3, now.timeIntervalSince1970) == SQLITE_OK,
+                  sqlite3_step(accountStatement) == SQLITE_DONE else { throw CocoaError(.fileWriteUnknown) }
+            var historyStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "INSERT INTO token_daily_history VALUES (?, ?, ?, ?, ?, ?, ?)", -1,
+                                     &historyStatement, nil) == SQLITE_OK,
+                  let historyStatement else { throw CocoaError(.fileWriteUnknown) }
+            defer { sqlite3_finalize(historyStatement) }
+            guard "C1".withCString({ sqlite3_bind_text(historyStatement, 1, $0, -1, transient) }) == SQLITE_OK,
+                  "2026-10-22".withCString({ sqlite3_bind_text(historyStatement, 2, $0, -1, transient) }) == SQLITE_OK,
+                  sqlite3_bind_int64(historyStatement, 3, 123) == SQLITE_OK,
+                  sqlite3_bind_int64(historyStatement, 4, 45) == SQLITE_OK,
+                  sqlite3_bind_int64(historyStatement, 5, 100) == SQLITE_OK,
+                  sqlite3_bind_int64(historyStatement, 6, 1) == SQLITE_OK,
+                  sqlite3_bind_double(historyStatement, 7, now.timeIntervalSince1970) == SQLITE_OK,
+                  sqlite3_step(historyStatement) == SQLITE_DONE else { throw CocoaError(.fileWriteUnknown) }
+        }
+
+        let cache = TokenUsageSnapshotCache(provider: LocalTokenUsageProvider(calendar: calendar, now: { now }),
+            accountHomes: ["C1": home], now: { now }, calendar: calendar, historyDatabaseURL: historyURL,
+            sharedHomeResolver: SharedCodexHomeResolver(homeDirectory: root))
+        let cached = await cache.cachedSnapshot(for: "C1")
+        XCTAssertEqual(cached?.dailyPoints.first { $0.date == date(2026, 10, 22) }?.inputTokens, 123)
+        XCTAssertEqual(cached?.last30Days.inputTokens, 123)
+
+        let refreshed = await cache.refresh(accountID: "C1", home: home)
+        XCTAssertEqual(refreshed.dailyPoints.first { $0.date == date(2026, 10, 22) }?.inputTokens, 123)
+        XCTAssertEqual(refreshed.last30Days.inputTokens, 123)
+
+        let restarted = TokenUsageSnapshotCache(accountHomes: ["C1": home], now: { now }, calendar: calendar,
+            historyDatabaseURL: historyURL, sharedHomeResolver: SharedCodexHomeResolver(homeDirectory: root))
+        let restored = await restarted.cachedSnapshot(for: "C1")
+        XCTAssertEqual(restored?.dailyPoints.first { $0.date == date(2026, 10, 22) }?.inputTokens, 123)
+        XCTAssertEqual(restored?.last30Days.inputTokens, 123)
+    }
+
+    /// 구형 공유 소스 서명 키를 홈 경로로 이관하며 일별 행을 유지하는지 검증
+    func testSourceSignatureHistoryMigratesWithoutDroppingRows() throws {
+        try withStore { store, _ in
+            let now = date(2026, 10, 23)
+            let yesterday = date(2026, 10, 22)
+            let oldIdentity = "/fixture#" + String(repeating: "a", count: 64)
+            _ = try store.merge(snapshot([point(yesterday, 123)], now: now), accountID: "C1",
+                homeIdentity: oldIdentity, options: .init(), now: now, calendar: calendar)
+
+            let migrated = try XCTUnwrap(store.load(accountID: "C1", homeIdentity: "/fixture",
+                options: .init(), now: now, calendar: calendar))
+            XCTAssertEqual(migrated.dailyPoints.first { $0.date == yesterday }?.inputTokens, 123)
+        }
+    }
+
+    /// 소유 계정을 확인할 수 없는 갱신이 기존 장기 기록을 덮거나 노출하지 않는지 검증
+    func testUnverifiedOwnerPreservesArchivedHistory() throws {
+        try withStore { store, _ in
+            let now = date(2026, 10, 23)
+            let yesterday = date(2026, 10, 22)
+            _ = try store.merge(snapshot([point(yesterday, 123)], now: now), accountID: "C1",
+                homeIdentity: "/fixture", accountIdentity: "owner-a", options: .init(), now: now, calendar: calendar)
+            _ = try store.merge(snapshot([], now: now.addingTimeInterval(1)), accountID: "C1",
+                homeIdentity: "/fixture", options: .init(), now: now.addingTimeInterval(1), calendar: calendar)
+
+            let hidden = try store.load(accountID: "C1", homeIdentity: "/fixture",
+                options: .init(), now: now, calendar: calendar)
+            let preserved = try store.load(accountID: "C1", homeIdentity: "/fixture", accountIdentity: "owner-a",
+                options: .init(), now: now, calendar: calendar)
+            XCTAssertNil(hidden)
+            XCTAssertEqual(preserved?.dailyPoints.first { $0.date == yesterday }?.inputTokens, 123)
+        }
     }
 
     /// 달력 개월 수 경계 포함과 축소 후 실제 삭제·기간 재확대 시 비복원 검증

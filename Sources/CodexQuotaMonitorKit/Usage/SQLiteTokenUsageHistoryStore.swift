@@ -15,22 +15,31 @@ final class SQLiteTokenUsageHistoryStore: @unchecked Sendable {
 
     /// 불완전하거나 취소된 집계를 제외한 동일 날짜의 최신 값 교체
     func merge(
-        _ snapshot: TokenUsageSnapshot, accountID: String, homeIdentity: String,
+        _ snapshot: TokenUsageSnapshot, accountID: String, homeIdentity: String, accountIdentity: String? = nil,
         options: TokenUsageOptions, now: Date, calendar: Calendar
     ) throws -> TokenUsageSnapshot {
         guard snapshot.availability == .available else { return snapshot }
         try withDatabase { db in
             try execute(db, "BEGIN IMMEDIATE")
             defer { try? execute(db, "ROLLBACK") }
-            let oldHome = try accountMetadata(db, accountID)?.home
-            if oldHome != nil && oldHome != homeIdentity {
+            let metadata = try accountMetadata(db, accountID)
+            if let metadata, Self.matchesHome(metadata.home, for: homeIdentity),
+               metadata.accountIdentity != nil, accountIdentity == nil {
+                try execute(db, "COMMIT")
+                return
+            }
+            if metadata != nil,
+               try !matchesOwner(db, accountID: accountID, homeIdentity: homeIdentity, accountIdentity: accountIdentity) {
                 try execute(db, "DELETE FROM token_history_accounts WHERE account_id = ?", [.text(accountID)])
             }
             try execute(db, """
-                INSERT INTO token_history_accounts VALUES (?, ?, ?)
+                INSERT INTO token_history_accounts (account_id, home_identity, account_identity, updated_at)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(account_id) DO UPDATE SET home_identity=excluded.home_identity,
+                account_identity=coalesce(excluded.account_identity, token_history_accounts.account_identity),
                 updated_at=max(updated_at, excluded.updated_at)
-                """, [.text(accountID), .text(homeIdentity), .real(snapshot.generatedAt.timeIntervalSince1970)])
+                """, [.text(accountID), .text(homeIdentity), accountIdentity.map(Value.text) ?? .null,
+                      .real(snapshot.generatedAt.timeIntervalSince1970)])
             let cutoff = options.cutoff(at: now, calendar: calendar)
             let today = dayKey(now, calendar: calendar)
             let known = snapshot.recordedDates.map { Set($0.map { dayKey($0, calendar: calendar) }) }
@@ -54,17 +63,20 @@ final class SQLiteTokenUsageHistoryStore: @unchecked Sendable {
             try execute(db, "COMMIT")
         }
         blockedAccounts.remove(accountID)
-        return try load(accountID: accountID, homeIdentity: homeIdentity, options: options, now: now, calendar: calendar)
+        return try load(accountID: accountID, homeIdentity: homeIdentity, accountIdentity: accountIdentity,
+            options: options, now: now, calendar: calendar)
             ?? snapshot
     }
 
     /// 마지막 수집 시각을 보존한 장기 집계와 실제 수집 날짜 복원
     func load(
-        accountID: String, homeIdentity: String, options: TokenUsageOptions, now: Date, calendar: Calendar
+        accountID: String, homeIdentity: String, accountIdentity: String? = nil,
+        options: TokenUsageOptions, now: Date, calendar: Calendar
     ) throws -> TokenUsageSnapshot? {
         guard !blockAll, !blockedAccounts.contains(accountID), FileManager.default.fileExists(atPath: databaseURL.path) else { return nil }
         return try withDatabase { db in
-            guard let metadata = try accountMetadata(db, accountID), metadata.home == homeIdentity else { return nil }
+            guard try matchesOwner(db, accountID: accountID, homeIdentity: homeIdentity, accountIdentity: accountIdentity),
+                  let metadata = try accountMetadata(db, accountID) else { return nil }
             let cutoff = options.cutoff(at: now, calendar: calendar)
             let statement = try prepare(db, """
                 SELECT day, input_tokens, output_tokens, cached_input_tokens, session_count
@@ -126,13 +138,45 @@ final class SQLiteTokenUsageHistoryStore: @unchecked Sendable {
     }
 
     /// 계정 경로와 마지막 성공 수집 시각 조회
-    private func accountMetadata(_ db: OpaquePointer, _ id: String) throws -> (home: String, updatedAt: Date)? {
-        let statement = try prepare(db, "SELECT home_identity, updated_at FROM token_history_accounts WHERE account_id = ?", [.text(id)])
+    private func accountMetadata(_ db: OpaquePointer, _ id: String) throws -> (home: String, accountIdentity: String?, updatedAt: Date)? {
+        let statement = try prepare(db, "SELECT home_identity, account_identity, updated_at FROM token_history_accounts WHERE account_id = ?", [.text(id)])
         defer { sqlite3_finalize(statement) }
         let result = sqlite3_step(statement)
         if result == SQLITE_DONE { return nil }
         guard result == SQLITE_ROW else { throw Failure.operationFailed }
-        return (String(cString: sqlite3_column_text(statement, 0)), Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)))
+        let accountIdentity = sqlite3_column_type(statement, 1) == SQLITE_NULL
+            ? nil : String(cString: sqlite3_column_text(statement, 1))
+        return (String(cString: sqlite3_column_text(statement, 0)), accountIdentity,
+                Date(timeIntervalSince1970: sqlite3_column_double(statement, 2)))
+    }
+
+    /// 경로·기본 계정 소유권 일치와 구형 소스 키 이관
+    private func matchesOwner(_ db: OpaquePointer, accountID: String, homeIdentity: String,
+                              accountIdentity: String?) throws -> Bool {
+        guard let metadata = try accountMetadata(db, accountID),
+              Self.matchesHome(metadata.home, for: homeIdentity),
+              metadata.accountIdentity == nil || metadata.accountIdentity == accountIdentity
+        else { return false }
+        let migratedAccountIdentity = metadata.accountIdentity ?? accountIdentity
+        if metadata.home != homeIdentity || metadata.accountIdentity != migratedAccountIdentity {
+            try execute(db, """
+                UPDATE token_history_accounts SET home_identity = ?, account_identity = ? WHERE account_id = ?
+                """, [.text(homeIdentity), migratedAccountIdentity.map(Value.text) ?? .null, .text(accountID)])
+        }
+        return true
+    }
+
+    /// 구형 공유 소스 키에서 홈 경로와 SHA-256 접미부 확인
+    private static func isLegacySourceIdentity(_ value: String, for homeIdentity: String) -> Bool {
+        let prefix = homeIdentity + "#"
+        guard value.hasPrefix(prefix) else { return false }
+        let suffix = value.dropFirst(prefix.count)
+        return suffix.count == 64 && suffix.allSatisfy(\.isHexDigit)
+    }
+
+    /// 현재 홈 경로 또는 구형 소스 키의 기본 홈 일치 확인
+    private static func matchesHome(_ value: String, for homeIdentity: String) -> Bool {
+        value == homeIdentity || isLegacySourceIdentity(value, for: homeIdentity)
     }
 
     /// 로컬 날짜의 시간대 변경과 독립적인 정렬 키 구성
@@ -160,7 +204,22 @@ final class SQLiteTokenUsageHistoryStore: @unchecked Sendable {
         try execute(db, "PRAGMA auto_vacuum = INCREMENTAL")
         guard let schema = Self.schemaURL() else { throw Failure.invalidData }
         guard sqlite3_exec(db, try String(contentsOf: schema, encoding: .utf8), nil, nil, nil) == SQLITE_OK else { throw Failure.operationFailed }
+        try ensureAccountIdentityColumn(db)
         return try operation(db)
+    }
+
+    /// 기존 데이터베이스에 기본 계정 소유권 열 추가
+    private func ensureAccountIdentityColumn(_ db: OpaquePointer) throws {
+        let statement = try prepare(db, "PRAGMA table_info(token_history_accounts)", [])
+        defer { sqlite3_finalize(statement) }
+        var found = false
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
+            if String(cString: sqlite3_column_text(statement, 1)) == "account_identity" { found = true }
+            result = sqlite3_step(statement)
+        }
+        guard result == SQLITE_DONE else { throw Failure.operationFailed }
+        if !found { try execute(db, "ALTER TABLE token_history_accounts ADD COLUMN account_identity TEXT") }
     }
 
     /// 빌드 디렉터리가 없는 설치 앱의 리소스를 우선하고 SwiftPM 실행 경로 지원

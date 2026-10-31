@@ -181,27 +181,71 @@ final class SharedCodexHomeTests: XCTestCase {
         XCTAssertEqual(store.localTodaySnapshot(for: account)?.today.inputTokens, 10)
     }
 
-    /// 인증 변경 시 메모리·영속 집계 격리와 재조회 귀속 변경 검증
-    func testCacheReevaluatesLoginAndHistory() async throws {
+    /// 공유 소스 연결·해제 시 메모리 격리와 장기 기록 보존 검증
+    func testCacheReevaluatesLoginAndPreservesHistoryAcrossSharedSources() async throws {
         let f = try Fixture()
         defer { f.remove() }
         try f.prepare()
+        try f.auth(f.shared, email: "other@example.test")
         let cache = TokenUsageSnapshotCache(provider: LocalTokenUsageProvider(calendar: f.calendar, now: { Fixture.date }),
             databaseURL: f.root.appendingPathComponent("cache.sqlite"),
             accountHomes: [f.slot.id: f.slot.home, f.other.id: f.other.home], now: { Fixture.date }, calendar: f.calendar,
             historyDatabaseURL: f.root.appendingPathComponent("history.sqlite"),
             todayProvider: TodayTokenUsageProvider(calendar: f.calendar, now: { Fixture.date }), sharedHomeResolver: f.resolver)
         let first = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
-        XCTAssertEqual(first.today.inputTokens, 30)
+        XCTAssertEqual(first.today.inputTokens, 10)
         let live = await cache.refreshToday(accountID: f.slot.id, home: f.slot.home)
-        XCTAssertEqual(live?.today.inputTokens, 30)
+        XCTAssertEqual(live?.today.inputTokens, 10)
+
+        try f.auth(f.shared)
+        let beforeAttachRefresh = await cache.cachedSnapshot(for: f.slot.id)
+        XCTAssertEqual(beforeAttachRefresh?.today.inputTokens, 10)
+        let attached = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
+        XCTAssertEqual(attached.today.inputTokens, 30)
+
         try f.auth(f.shared, email: "other@example.test")
-        let stale = await cache.cachedSnapshot(for: f.slot.id)
-        XCTAssertNil(stale)
+        let beforeDetachRefresh = await cache.cachedSnapshot(for: f.slot.id)
+        XCTAssertEqual(beforeDetachRefresh?.today.inputTokens, 30)
         let own = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
         let switched = await cache.refresh(accountID: f.other.id, home: f.other.home)
         XCTAssertEqual(own.today.inputTokens, 10)
         XCTAssertEqual(switched.today.inputTokens, 37)
+    }
+
+    /// 기본 홈 계정 교체 시 이전 소유자의 장기 기록 비노출·제거 검증
+    func testCacheClearsHistoryForReplacedPrimaryAccount() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try f.auth(f.slot.home, account: "old-team", email: "old@example.test")
+        let now = Fixture.date
+        let yesterday = now.addingTimeInterval(-86_400)
+        let historyURL = f.root.appendingPathComponent("history.sqlite")
+        let oldIdentity = try XCTUnwrap(f.resolver.accountIdentity(for: f.slot))
+        let archived = TokenUsageSnapshot(generatedAt: now,
+            dailyPoints: [TokenUsageDailyPoint(date: yesterday, inputTokens: 123, outputTokens: 0, sessionCount: 1)],
+            last30Days: TokenUsageTotals(inputTokens: 123), totalSessions: 1, averageTokensPerSession: 123,
+            recordedDates: [yesterday])
+        _ = try SQLiteTokenUsageHistoryStore(databaseURL: historyURL).merge(archived, accountID: f.slot.id,
+            homeIdentity: f.slot.home.path, accountIdentity: oldIdentity, options: .init(), now: now, calendar: f.calendar)
+
+        let cache = TokenUsageSnapshotCache(provider: LocalTokenUsageProvider(calendar: f.calendar, now: { now }),
+            accountHomes: [f.slot.id: f.slot.home], now: { now }, calendar: f.calendar,
+            historyDatabaseURL: historyURL, sharedHomeResolver: f.resolver)
+        let beforeReplacement = await cache.cachedSnapshot(for: f.slot.id)
+        XCTAssertEqual(beforeReplacement?.last30Days.inputTokens, 123)
+
+        try f.auth(f.slot.home, account: "new-team", email: "new@example.test")
+        let hiddenPrevious = await cache.cachedSnapshot(for: f.slot.id)
+        XCTAssertNil(hiddenPrevious)
+        let replacement = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
+        XCTAssertEqual(replacement.availability, .available)
+        XCTAssertEqual(replacement.last30Days.inputTokens, 0)
+
+        let restarted = TokenUsageSnapshotCache(accountHomes: [f.slot.id: f.slot.home], now: { now },
+            calendar: f.calendar, historyDatabaseURL: historyURL, sharedHomeResolver: f.resolver)
+        let restored = await restarted.cachedSnapshot(for: f.slot.id)
+        XCTAssertEqual(restored?.last30Days.inputTokens, 0)
+        XCTAssertFalse(restored?.recordedDates?.contains(yesterday) ?? true)
     }
 }
 

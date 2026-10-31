@@ -36,6 +36,12 @@ public struct SharedCodexHomeResolver: Sendable {
         return SHA256.hash(data: Data(values.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// 공유 소스 변경과 분리된 기본 홈 계정 식별자 생성
+    func accountIdentity(for account: AccountConfig) -> String? {
+        guard account.provider == .codex, let identity = identity(home: account.home) else { return nil }
+        return SHA256.hash(data: Data(identity.key.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// 제한된 인증 파일에서 계정·이메일·안정 사용자 식별자만 추출
     private func identity(home: URL) -> Identity? {
         let file = home.appendingPathComponent("auth.json")
