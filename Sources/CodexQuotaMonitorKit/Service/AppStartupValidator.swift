@@ -16,7 +16,9 @@ public enum AppStartupValidator {
         }
         let resources = bundle.resourceURL?.appendingPathComponent("CodexQuotaMonitor_CodexQuotaMonitorKit.bundle")
         let required = ["app-update.sh", "token-history-schema.sql", "menu-bar-template.svg",
-                        "probe-airplane.svg", "service-status-smile.svg", "service-status-sad.svg"]
+                        "probe-airplane.svg", "service-status-smile.svg", "service-status-sad.svg",
+                        "settings-tab-general.svg", "settings-tab-accounts.svg",
+                        "settings-tab-display.svg", "settings-tab-notifications.svg"]
         guard let resources, required.allSatisfy({ FileManager.default.isReadableFile(atPath: resources.appendingPathComponent($0).path) }) else {
             throw AppOperationFailure(.startupResources, "앱 실행에 필요한 리소스가 없거나 읽을 수 없습니다.")
         }

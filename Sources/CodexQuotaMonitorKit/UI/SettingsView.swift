@@ -24,10 +24,11 @@ public enum SettingsWindowPresentationPolicy {
 
 /// 목적: 호출자 바인딩을 통해 계정 표시와 앱 설정을 편집하는 화면
 public struct SettingsView: View {
+    public static let footerText = "OpenAI 및 Anthropic과 제휴 관계가 없는 비공식 독립 프로젝트입니다."
     public static let refreshSectionTitle = "새로고침"
     public static let activitySectionTitle = "활동 알림"
     public static let quotaResetNotificationSectionTitle = "할당량 초기화 알림"
-    public static let notificationPermissionHelp = "알림 기능이나 자동 전송을 켜거나 권한 요청 버튼을 누르면 알림 권한을 요청합니다. 거부한 권한은 시스템 설정에서 변경할 수 있습니다."
+    public static let notificationPermissionHelp = "사전 알림을 켜거나 권한 요청을 누르면 권한을 요청합니다. 거부한 권한은 시스템 설정에서 변경하세요."
     public static let accountVisibilitySectionTitle = "표시할 계정"
     public static let accountDisplayOrderSectionTitle = "계정 표시 순서"
     public static let activityNotificationDurationLabel = "활동 알림 표시 시간"
@@ -278,188 +279,18 @@ public struct SettingsView: View {
 
     /// 목적: 계정 표시·경로·갱신·시작 설정 화면 구성
     public var body: some View {
-        ScrollView {
-            Form {
-                NotchDisplayStyleSettingsSection(selection: $notchDisplayStyle)
-                Section(Self.refreshSectionTitle) {
-                    Toggle("주기 조회", isOn: $automaticRefreshEnabled)
-                    Text("앱 시작 시 확인과 수동 새로고침은 주기 조회를 꺼도 실행됩니다.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Picker("새로고침 간격", selection: refreshIntervalBinding) {
-                        if !Self.refreshIntervalOptions.contains(refreshIntervalMinutes) {
-                            Text("직접 입력: \(refreshIntervalMinutes)분").tag(refreshIntervalMinutes)
-                        }
-                        ForEach(Self.refreshIntervalOptions, id: \.self) { minutes in
-                            Text("\(minutes)분").tag(minutes)
-                        }
+        TabView {
+            ForEach(SettingsTab.allCases, id: \.self) { tab in
+                settingsForm {
+                    switch tab {
+                    case .general: generalSections
+                    case .accounts: accountSections
+                    case .display: displaySections
+                    case .notifications: notificationSections
                     }
-                    .pickerStyle(.menu)
-
-                    HStack {
-                        Text("직접 입력")
-                        Spacer()
-                        TextField("분", text: refreshIntervalDraftBinding)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 64)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit(commitRefreshIntervalDraft)
-
-                    }
-                    Text("모든 계정에 적용됩니다. 1~60분을 입력한 뒤 Enter를 누르면 적용됩니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
-
-                Section(Self.accountPathSectionTitle) {
-                    Button("계정 연결 가이드", action: onConnectAccount)
-                    ForEach(0..<Self.accountPathCount, id: \.self) { index in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("C\(index + 1)").font(.caption.weight(.semibold)).frame(width: 28)
-                                TextField("계정 폴더 경로", text: pathBinding(at: index))
-                                    .textFieldStyle(.roundedBorder)
-                                    .onSubmit(commitAccountPathsDraft)
-                                Button("폴더 선택") { chooseAccountDirectory(at: index) }
-                            }
-                            if let validation = accountPathsDraft.validationErrors[index],
-                               let message = validation.userMessage {
-                                Text(message)
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                                    .accessibilityIdentifier("account-path-error-\(index + 1)")
-                            }
-                        }
-                    }
-                    HStack {
-                        Button("경로 적용", action: commitAccountPathsDraft)
-                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
-                        Button("경로 편집 취소", action: synchronizeAccountPathDrafts)
-                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
-                    }
-                    Text("경로는 적용 또는 Enter로 저장합니다. 폴더 선택은 적용 전까지 저장되지 않습니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    AccountPathHelpView()
-                }
-
-                Section("계정 표시·이름·순서") {
-                    AccountOrderEditor(
-                        order: Binding(get: { normalizedAccountDisplayOrder }, set: { updateAccountDisplayOrder($0) }),
-                        names: accountDisplayNames,
-                        enabledAccountIDs: Binding(get: { enabledAccountDraft }, set: { ids in
-                            enabledAccountDraft = Self.applyDisplayChange(ids, binding: $enabledAccountIDs)
-                        }),
-                        nameDrafts: $accountNamesDraft,
-                        onCommitNames: commitAccountNames
-                    )
-                    HStack {
-                        Button("이름 적용", action: commitAccountNames)
-                            .accessibilityIdentifier("apply-account-names")
-                            .disabled(accountNamesDraft == accountDisplayNames)
-                        Button("이름 편집 취소") { accountNamesDraft = accountDisplayNames }
-                            .disabled(accountNamesDraft == accountDisplayNames)
-                    }
-                    Text("체크한 계정은 왼쪽부터 최대 두 개씩 표시됩니다. 순서는 손잡이를 드래그해 변경합니다. 모두 숨겨도 메뉴 막대에서 설정을 열 수 있습니다.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text("이름은 문자·숫자·공백으로 최대 14자까지 입력할 수 있습니다. 이름 적용 또는 Enter로 저장하며 비워두면 슬롯명을 사용합니다.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                TokenUsageSettingsSection(options: $tokenUsageOptions)
-
-                Section(Self.activitySectionTitle) {
-                    Picker(Self.activityNotificationDurationLabel, selection: activityNotificationDurationBinding) {
-                        ForEach(Self.minimumActivityNotificationDurationSeconds...Self.maximumActivityNotificationDurationSeconds, id: \.self) { seconds in
-                            Text("\(seconds)초").tag(seconds)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    Text("1~10초 중 선택할 수 있습니다. 기본값은 3초이며 다음 활동 알림부터 적용됩니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section(Self.quotaResetNotificationSectionTitle) {
-                    Picker("초기화 사전 알림", selection: $resetReminderMinutes) {
-                        Text("끔").tag(0)
-                        Text("10분 전").tag(10)
-                        Text("5분 전").tag(5)
-                        Text("3분 전").tag(3)
-                    }
-                    Text("할당량 시간이 고정되면 해당 시각에 다시 조회하고 도달 알림을 보냅니다. 사전 알림을 꺼도 도달 알림은 유지됩니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("권한: \(notificationAuthorizationText)")
-                        Text("전달: \(notificationOutcomeText)")
-                            .foregroundStyle(.secondary)
-                        if let error = notificationDelivery.status.authorizationError {
-                            Text("권한 오류: \(error)")
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
-                        }
-                        if let error = notificationDelivery.status.deliveryError {
-                            Text("전달 오류: \(error)")
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
-                        }
-                    }
-
-                    HStack {
-                        Button("권한 요청 / 다시 확인", action: onRetryNotificationAuthorization)
-                            .disabled(notificationControlsUnavailable)
-                        Button("테스트 알림", action: onSendNotificationTest)
-                            .disabled(notificationControlsUnavailable)
-                        Button("알림 설정 열기", action: onOpenNotificationSettings)
-                            .disabled(notificationControlsUnavailable)
-                    }
-                    Text(Self.notificationPermissionHelp)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let appUpdateStore { AppUpdateSettingsSection(store: appUpdateStore) }
-
-                Section {
-                    if let launchAtLoginService {
-                        LaunchAtLoginSettingsView(service: launchAtLoginService) { enabled in
-                            launchAtLogin = enabled
-                        }
-                    } else {
-                        Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
-                    }
-                    Toggle("계정 이름 표시", isOn: $showAccountLabels)
-                    Text("로그인 시 앱을 자동으로 실행합니다. macOS 시스템 설정 > 로그인 항목에서 승인이 필요할 수 있습니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } header: {
-                    Text("앱 실행")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("OpenAI와 무관한 비공식 독립 프로젝트입니다.")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("버전 \(appVersion)")
-                            .foregroundStyle(.secondary)
-                        Link(destination: URL(string: "https://github.com/jh-shi-n/codex_quota_checker")!) {
-                            HStack(spacing: 5) {
-                                Image(systemName: "chevron.left.slash.chevron.right")
-                                Text("GitHub")
-                                Image(systemName: "arrow.up.right")
-                                    .font(.system(size: 9, weight: .medium))
-                            }
-                        }
-                        .help("https://github.com/jh-shi-n/codex_quota_checker")
-                        .accessibilityLabel("GitHub 프로젝트 저장소 열기")
-                    }
-                    .font(.caption)
-                }
+                .tabItem { tab.label }
             }
-            .formStyle(.grouped)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding()
         }
         .frame(
             minWidth: Self.minimumWindowSize.width,
@@ -483,6 +314,211 @@ public struct SettingsView: View {
         .onChange(of: accountPaths) { _, paths in accountPathsDraft.synchronize(paths: paths) }
         .onChange(of: enabledAccountIDs) { _, _ in synchronizeAccountDisplayDrafts() }
         .onChange(of: accountDisplayOrder) { _, _ in synchronizeAccountDisplayDrafts() }
+    }
+
+    /// 긴 탭도 창 크기 안에서 스크롤할 수 있는 공통 폼 구성
+    private func settingsForm<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        Form(content: content)
+            .formStyle(.grouped)
+            .padding(8)
+    }
+
+    /// 업데이트·로그인 실행·앱 정보 구성
+    @ViewBuilder private var generalSections: some View {
+        if let appUpdateStore { AppUpdateSettingsSection(store: appUpdateStore) }
+
+        Section {
+            if let launchAtLoginService {
+                LaunchAtLoginSettingsView(service: launchAtLoginService) { enabled in
+                    launchAtLogin = enabled
+                }
+            } else {
+                Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
+            }
+            Text("로그인 시 앱을 자동으로 실행합니다. macOS 시스템 설정 > 로그인 항목에서 승인이 필요할 수 있습니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("앱 실행")
+        } footer: {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(Self.footerText)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("버전 \(appVersion)")
+                    .foregroundStyle(.secondary)
+                Link(destination: URL(string: "https://github.com/jh-shi-n/codex_quota_checker")!) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.left.slash.chevron.right")
+                        Text("GitHub")
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                }
+                .help("https://github.com/jh-shi-n/codex_quota_checker")
+                .accessibilityLabel("GitHub 프로젝트 저장소 열기")
+            }
+            .font(.caption)
+        }
+    }
+
+    /// 경로 초안과 계정 표시·이름·순서 구성
+    @ViewBuilder private var accountSections: some View {
+        Section(Self.accountPathSectionTitle) {
+            Button("계정 연결 가이드", action: onConnectAccount)
+            ForEach(0..<Self.accountPathCount, id: \.self) { index in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(SettingsAccountLabel.slot("C\(index + 1)"))
+                            .font(.caption.weight(.semibold)).frame(width: 36)
+                        Text(SettingsAccountLabel.providerBadge(path: Self.paddedAccountPaths(accountPaths)[index]))
+                            .font(.caption2)
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(.quaternary, in: Capsule())
+                        TextField("계정 폴더 경로", text: pathBinding(at: index))
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(commitAccountPathsDraft)
+                        Button("폴더 선택") { chooseAccountDirectory(at: index) }
+                    }
+                    if let validation = accountPathsDraft.validationErrors[index],
+                       let message = validation.userMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("account-path-error-\(index + 1)")
+                    }
+                }
+            }
+            HStack {
+                Button("경로 적용", action: commitAccountPathsDraft)
+                    .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
+                Button("경로 편집 취소", action: synchronizeAccountPathDrafts)
+                    .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
+            }
+            Text("경로 변경은 경로 적용을 누르거나 Enter를 눌러야 저장됩니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            AccountPathHelpView(instructions: "CLI에 아래 요청을 붙여 넣으세요. 응답받은 경로를 입력한 뒤 경로 적용을 누르세요.")
+        }
+
+        Section("계정 표시·이름·순서") {
+            AccountOrderEditor(
+                order: Binding(get: { normalizedAccountDisplayOrder }, set: { updateAccountDisplayOrder($0) }),
+                names: accountDisplayNames,
+                enabledAccountIDs: Binding(get: { enabledAccountDraft }, set: { ids in
+                    enabledAccountDraft = Self.applyDisplayChange(ids, binding: $enabledAccountIDs)
+                }),
+                nameDrafts: $accountNamesDraft,
+                onCommitNames: commitAccountNames
+            )
+            HStack {
+                Button("이름 적용", action: commitAccountNames)
+                    .accessibilityIdentifier("apply-account-names")
+                    .disabled(accountNamesDraft == accountDisplayNames)
+                Button("이름 편집 취소") { accountNamesDraft = accountDisplayNames }
+                    .disabled(accountNamesDraft == accountDisplayNames)
+            }
+            Text("체크한 계정은 왼쪽부터 두 개씩 표시됩니다. 손잡이를 드래그하면 순서가 바로 바뀝니다. 모두 숨겨도 메뉴 막대에서 설정을 열 수 있습니다.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("이름 변경은 이름 적용을 누르거나 Enter를 눌러야 저장됩니다. 문자·숫자·공백으로 최대 14자까지 입력하세요. 비우면 기본 계정 이름을 사용합니다.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// 노치·계정 이름·토큰 그래프 표시 구성
+    @ViewBuilder private var displaySections: some View {
+        NotchDisplayStyleSettingsSection(selection: $notchDisplayStyle)
+        Section("계정 이름") {
+            Toggle("계정 이름 표시", isOn: $showAccountLabels)
+            Text("노치에 계정 이름을 표시합니다.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        TokenUsageSettingsSection(options: $tokenUsageOptions)
+    }
+
+    /// 조회 주기·활동 알림·할당량 알림 구성
+    @ViewBuilder private var notificationSections: some View {
+        Section(Self.refreshSectionTitle) {
+            Toggle("주기 조회", isOn: $automaticRefreshEnabled)
+            Text("주기 조회를 꺼도 앱 시작 시 조회와 수동 새로고침은 실행됩니다.")
+                .font(.caption).foregroundStyle(.secondary)
+            Picker("새로고침 간격", selection: refreshIntervalBinding) {
+                if !Self.refreshIntervalOptions.contains(refreshIntervalMinutes) {
+                    Text("직접 입력: \(refreshIntervalMinutes)분").tag(refreshIntervalMinutes)
+                }
+                ForEach(Self.refreshIntervalOptions, id: \.self) { minutes in
+                    Text("\(minutes)분").tag(minutes)
+                }
+            }
+            .pickerStyle(.menu)
+
+            HStack {
+                Text("직접 입력")
+                Spacer()
+                TextField("분", text: refreshIntervalDraftBinding)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 64)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(commitRefreshIntervalDraft)
+
+            }
+            Text("1~60분을 입력하고 Enter를 누르면 모든 계정에 적용됩니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        Section(Self.activitySectionTitle) {
+            Picker(Self.activityNotificationDurationLabel, selection: activityNotificationDurationBinding) {
+                ForEach(Self.minimumActivityNotificationDurationSeconds...Self.maximumActivityNotificationDurationSeconds, id: \.self) { seconds in
+                    Text("\(seconds)초").tag(seconds)
+                }
+            }
+            .pickerStyle(.menu)
+            Text("선택한 시간은 다음 활동 알림부터 적용됩니다. 1~10초를 선택할 수 있으며 기본값은 3초입니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        Section(Self.quotaResetNotificationSectionTitle) {
+            Picker("초기화 사전 알림", selection: $resetReminderMinutes) {
+                Text("끔").tag(0)
+                Text("10분 전").tag(10)
+                Text("5분 전").tag(5)
+                Text("3분 전").tag(3)
+            }
+            Text("초기화 시각이 확정되면 해당 시각에 다시 조회하고 도달 알림을 보냅니다. 사전 알림을 꺼도 도달 알림은 보냅니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("권한: \(notificationAuthorizationText)")
+                Text("전달: \(notificationOutcomeText)")
+                    .foregroundStyle(.secondary)
+                if let error = notificationDelivery.status.authorizationError {
+                    Text("권한 오류: \(error)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+                if let error = notificationDelivery.status.deliveryError {
+                    Text("전달 오류: \(error)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+            }
+
+            HStack {
+                Button("권한 요청 / 다시 확인", action: onRetryNotificationAuthorization)
+                    .disabled(notificationControlsUnavailable)
+                Button("테스트 알림", action: onSendNotificationTest)
+                    .disabled(notificationControlsUnavailable)
+                Button("알림 설정 열기", action: onOpenNotificationSettings)
+                    .disabled(notificationControlsUnavailable)
+            }
+            Text(Self.notificationPermissionHelp)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     /// 설치 앱의 번들 버전 표시 및 소스 미리보기의 현재 릴리스 기본값
@@ -521,27 +557,27 @@ public struct SettingsView: View {
     /// 목적: 권한 상태의 사용자 표시 문구 제공
     private var notificationAuthorizationText: String {
         switch notificationDelivery.status.authorization {
-        case .checking: "상태 확인 중"
-        case .notRequested: "아직 권한을 요청하지 않음"
-        case .denied: "꺼짐 · 시스템 설정에서 허용 필요"
-        case .authorized: "허용됨"
-        case .provisional: "임시 허용"
-        case .ephemeral: "임시 허용"
-        case .unavailable: "앱 번들에서 실행되지 않아 사용할 수 없음"
-        case .unknown: "알 수 없는 상태"
-        case .error: "상태 확인 실패"
+        case .checking: "상태를 확인하고 있습니다."
+        case .notRequested: "아직 권한을 요청하지 않았습니다."
+        case .denied: "꺼져 있습니다. 시스템 설정에서 허용하세요."
+        case .authorized: "허용되어 있습니다."
+        case .provisional: "임시로 허용되어 있습니다."
+        case .ephemeral: "임시로 허용되어 있습니다."
+        case .unavailable: "앱 번들에서 실행해야 사용할 수 있습니다."
+        case .unknown: "상태를 알 수 없습니다."
+        case .error: "상태를 확인하지 못했습니다."
         }
     }
 
     /// 목적: 마지막 시스템 알림 전달 결과의 사용자 표시 문구 제공
     private var notificationOutcomeText: String {
         switch notificationDelivery.status.outcome {
-        case .idle: "전달 기록 없음"
-        case .delivered: "시스템 알림 전달 완료"
-        case .fallback: "노치 활동 토스트에 대체 표시"
-        case .testDelivered: "테스트 알림 전달 완료"
-        case .testFailed: "테스트 알림 전달 실패"
-        case .failed: "시스템 알림 전달 불가"
+        case .idle: "전달 기록이 없습니다."
+        case .delivered: "시스템 알림을 전달했습니다."
+        case .fallback: "노치 활동 알림으로 대신 표시했습니다."
+        case .testDelivered: "테스트 알림을 전달했습니다."
+        case .testFailed: "테스트 알림을 전달하지 못했습니다."
+        case .failed: "시스템 알림을 전달할 수 없습니다."
         }
     }
 

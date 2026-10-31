@@ -18,9 +18,9 @@ struct TokenUsageSettingsSection: View {
                 Text("6개월").tag(6)
                 Text("1년").tag(12)
             }
-            Text("잔디는 최근 24주를 표시합니다. 서버 사용량을 우선하고, 오늘 내역이 없으면 연결 계정의 로컬 사용량을 표시합니다.")
+            Text("서버 사용량을 우선 표시합니다. 오늘 내역이 없으면 연결 계정의 로컬 사용량으로 보완합니다. 잔디는 최근 24주를 표시합니다.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("날짜는 UTC 기준이며, 미제공 날짜는 0과 구분합니다. 로컬 기록은 오늘만 보완하며 서버의 누적·일 최대 수치는 유지합니다.")
+            Text("날짜는 UTC를 기준으로 표시하며, 미제공 날짜는 0과 구분합니다. 로컬 기록은 서버의 누적·일 최대 수치를 바꾸지 않습니다.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

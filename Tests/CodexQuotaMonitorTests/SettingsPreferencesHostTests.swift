@@ -46,7 +46,9 @@ final class SettingsPreferencesHostTests: XCTestCase {
         }
         let host = window(content)
         defer { host.close() }
+        try await selectTab("표시", in: host)
         try await assertValue("잔디", identifier: "token-usage-display-mode", in: host)
+        try await selectTab("계정", in: host)
         let nameCandidate = await node(in: host, matching: { self.string($0, "accessibilityIdentifier") == "account-name-C1" })
         let nameField = try XCTUnwrap(nameCandidate)
         let focusSelector = NSSelectorFromString("setAccessibilityFocused:")
@@ -57,12 +59,14 @@ final class SettingsPreferencesHostTests: XCTestCase {
         let editor = try XCTUnwrap(host.firstResponder as? NSTextView)
         editor.insertText("작성 중 이름", replacementRange: NSRange(location: NSNotFound, length: 0))
         try await assertValue("작성 중 이름", identifier: "account-name-C1", in: host)
+        try await selectTab("표시", in: host)
         for mode in [TokenUsageDisplayMode.weeklyLine, .weeklyBar, .heatmap] {
             var options = preferences.tokenUsageOptions
             options.displayMode = mode
             preferences.updateTokenUsageOptions(options)
             try await assertValue(mode.title, identifier: "token-usage-display-mode", in: host)
         }
+        try await selectTab("계정", in: host)
         try await assertValue("작성 중 이름", identifier: "account-name-C1", in: host)
         XCTAssertTrue(preferences.accountDisplayNames.isEmpty)
         try await press("apply-account-names", in: host)
@@ -80,6 +84,26 @@ final class SettingsPreferencesHostTests: XCTestCase {
         try await assertValue("1", identifier: "account-visible-C1", in: host)
         XCTAssertEqual(preferences.enabledAccountIDs, ["C1"])
         XCTAssertEqual(PreferencesStore(userDefaults: defaults).enabledAccountIDs, ["C1"])
+    }
+
+    /// 기본 탭 버튼을 눌러 실제 탭 이동과 초안 수명 검증
+    private func selectTab(_ title: String, in window: NSWindow) async throws {
+        let candidate = await node(in: window, matching: {
+            self.string($0, "accessibilityRole") == "AXRadioButton"
+                && (self.string($0, "accessibilityTitle") == title || self.string($0, "accessibilityLabel") == title)
+        })
+        let object = try XCTUnwrap(candidate, title)
+        let selector = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(object.responds(to: selector))
+        typealias Press = @convention(c) (AnyObject, Selector) -> Bool
+        let action = unsafeBitCast(object.method(for: selector), to: Press.self)
+        _ = action(object, selector)
+        for _ in 0..<50 {
+            window.contentView?.layoutSubtreeIfNeeded()
+            if string(object, "accessibilityValue") == "1" { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(string(object, "accessibilityValue"), "1", title)
     }
 
     /// 접근성 컨트롤의 사용자 클릭 동작 수행
@@ -108,7 +132,7 @@ final class SettingsPreferencesHostTests: XCTestCase {
     private func node(in window: NSWindow, matching predicate: (NSObject) -> Bool) async -> NSObject? {
         for _ in 0..<50 {
             window.contentView?.layoutSubtreeIfNeeded()
-            if let found = find(window.contentView as Any, matching: predicate) { return found }
+            if let found = find(window, matching: predicate) { return found }
             try? await Task.sleep(for: .milliseconds(20))
         }
         return nil

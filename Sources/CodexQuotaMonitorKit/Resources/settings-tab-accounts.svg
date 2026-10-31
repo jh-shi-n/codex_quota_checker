@@ -1,0 +1,6 @@
+<!-- 목적: 연결된 두 슬롯의 계정 아이콘 / 이용처: 설정 계정 탭 / 사용방법: 번들 이미지의 템플릿 렌더링 / 실행 예시: settings-tab-accounts.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.5" y="3.5" width="13" height="6.5" rx="2"/>
+  <rect x="3.5" y="14" width="13" height="6.5" rx="2"/>
+  <path d="M7 6.75h2.5M7 17.25h2.5M16.5 6.75h2a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2h-2M18 12h2.5"/>
+</svg>

@@ -79,10 +79,11 @@ public struct AccountOrderEditor: View {
 
     /// 표시 체크·슬롯명·이름 입력과 별도 순서 손잡이 구성
     private func rowContent(_ slot: String, index: Int, width: CGFloat) -> some View {
+        let label = SettingsAccountLabel.slot(slot)
         let name = AccountDisplayName.resolved(names[slot] ?? "", slotID: slot)
         return HStack(spacing: 8) {
             if let enabledAccountIDs {
-                Toggle("\(slot) 표시", isOn: Binding(
+                Toggle("\(label) 표시", isOn: Binding(
                     get: { enabledAccountIDs.wrappedValue.contains(slot) },
                     set: { enabled in
                         var ids = enabledAccountIDs.wrappedValue.filter { $0 != slot }
@@ -92,10 +93,10 @@ public struct AccountOrderEditor: View {
                 ))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
-                .accessibilityLabel("\(slot) 표시")
+                .accessibilityLabel("\(label) 표시")
                 .accessibilityIdentifier("account-visible-\(slot)")
             }
-            Text(slot).monospaced().fontWeight(.medium)
+            Text(label).monospaced().fontWeight(.medium)
             if let nameDrafts {
                 TextField("계정 이름 (최대 14자)", text: Binding(
                     get: { nameDrafts.wrappedValue[slot] ?? "" },
@@ -103,7 +104,7 @@ public struct AccountOrderEditor: View {
                 ))
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(onCommitNames)
-                .accessibilityLabel("\(slot) 사용자 이름")
+                .accessibilityLabel("\(label) 사용자 이름")
                 .accessibilityIdentifier("account-name-\(slot)")
             } else {
                 if name != slot { Text(name).foregroundStyle(.secondary).lineLimit(1) }
@@ -114,11 +115,11 @@ public struct AccountOrderEditor: View {
                 .frame(width: 26, height: 32)
                 .contentShape(Rectangle())
                 .gesture(dragGesture(slot, width: width))
-                .accessibilityLabel("\(slot) 순서")
+                .accessibilityLabel("\(label) 순서")
                 .accessibilityValue("\(index + 1) / 4")
                 .accessibilityAction(named: Text("위로 이동")) { move(slot, offset: -1) }
                 .accessibilityAction(named: Text("아래로 이동")) { move(slot, offset: 1) }
-                .help("손잡이를 드래그하여 계정 순서 변경")
+                .help("손잡이를 드래그하면 계정 순서가 바뀝니다.")
         }
         .padding(.horizontal, 8)
         .frame(height: 36)
@@ -131,7 +132,7 @@ public struct AccountOrderEditor: View {
         }
         .opacity(draggedSlot == slot ? 0.55 : 1)
         .accessibilityElement(children: nameDrafts == nil ? .ignore : .contain)
-        .accessibilityLabel(name == slot ? slot : "\(slot), \(name)")
+        .accessibilityLabel(name == slot ? label : "\(label), \(name)")
         .accessibilityValue("\(index + 1) / 4")
         .accessibilityAction(named: Text("위로 이동")) { move(slot, offset: -1) }
         .accessibilityAction(named: Text("아래로 이동")) { move(slot, offset: 1) }

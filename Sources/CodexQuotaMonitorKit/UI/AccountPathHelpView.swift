@@ -29,15 +29,18 @@ public enum AccountPathHelp {
 /// 경로를 모르는 사용자의 CLI 확인·붙여 넣기·연결 확인 안내
 public struct AccountPathHelpView: View {
     @State private var copyMessage: String?
+    private let instructions: String
 
     /// 가이드·설정 공용 경로 안내 초기화
-    public init() {}
+    public init(instructions: String = "아래 요청을 복사해 사용 중인 Codex 또는 Claude CLI에 붙여 넣으세요. 응답받은 경로를 위 입력란에 붙여 넣은 뒤 연결해 주세요.") {
+        self.instructions = instructions
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("계정 경로를 모르시나요?")
                 .font(.callout.weight(.medium))
-            Text("아래 요청을 복사해 사용 중인 Codex 또는 Claude CLI에 붙여 넣으세요. 응답받은 경로를 위 입력란에 붙여 넣은 뒤 연결해 주세요.")
+            Text(instructions)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
