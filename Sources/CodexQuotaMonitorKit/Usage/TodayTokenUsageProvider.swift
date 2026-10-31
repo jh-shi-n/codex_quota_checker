@@ -56,19 +56,25 @@ public actor TodayTokenUsageProvider: TokenUsageTodayProvider {
 
     /// 홈별 증분 커서를 보존하며 동일 세션·파일의 당일 합계 중복 제거
     public func todaySnapshot(homes sourceHomes: [URL]) async -> TokenUsageSnapshot? {
+        let reference = now()
         var seen = LocalSessionDeduplicator()
-        var combined: [TokenUsageDailyPoint] = []
+        var rollouts: [TokenRolloutEvidence] = []
         for home in sourceHomes {
-            guard let result = await collect(home: home, seen: &seen) else { return nil }
-            combined.append(contentsOf: result.dailyPoints)
+            guard let collected = await collect(home: home, at: reference) else { return nil }
+            for rollout in collected where seen.insert(file: rollout.url) {
+                rollouts.append(rollout)
+            }
         }
-        return TokenUsageAggregator(calendar: calendar, dayCount: 1).aggregate(dailyPoints: combined, generatedAt: now())
+        let points = parser.reconciledDailyPoints(rollouts, generatedAt: reference)
+        let result = TokenUsageAggregator(calendar: calendar, dayCount: 1).aggregate(dailyPoints: points, generatedAt: reference)
+        return TokenUsageSnapshot(generatedAt: reference, dailyPoints: result.dailyPoints, today: result.today,
+            last7Days: result.last7Days, last30Days: result.last30Days, totalSessions: result.totalSessions,
+            averageTokensPerSession: result.averageTokensPerSession, recordedDates: [calendar.startOfDay(for: reference)])
     }
 
-    /// 단일 홈의 기존 상한을 적용한 수집 및 중복 없는 숫자 반환
-    private func collect(home: URL, seen: inout LocalSessionDeduplicator) async -> TokenUsageSnapshot? {
+    /// 단일 홈의 기존 상한을 적용한 증거 수집
+    private func collect(home: URL, at reference: Date) async -> [TokenRolloutEvidence]? {
         lastReadBytes = 0
-        let reference = now()
         let root = home.standardizedFileURL.resolvingSymlinksInPath()
         guard home.isFileURL, !Task.isCancelled else { return nil }
         do {
@@ -83,7 +89,7 @@ public actor TodayTokenUsageProvider: TokenUsageTodayProvider {
             var remaining = maxReadBytes
             var complete = true
             let today = calendar.startOfDay(for: reference)
-            var points: [TokenUsageDailyPoint] = []
+            var rollouts: [TokenRolloutEvidence] = []
             for url in urls.sorted(by: { $0.path < $1.path }) {
                 try Task.checkCancellation()
                 let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -97,29 +103,26 @@ public actor TodayTokenUsageProvider: TokenUsageTodayProvider {
                     || (length == cursor.size && modified != cursor.modifiedAt) {
                     cursor = Cursor(identity: identity)
                 }
+                cursor.state.retain(from: today, calendar: calendar)
                 let directoryDate = parser.dateFromSessionsDirectory(for: url, sessionsURL: root.appendingPathComponent("sessions"))
                 let finished = try advance(url: url, cursor: &cursor, length: length,
-                    directoryDate: directoryDate, remaining: &remaining)
+                    directoryDate: directoryDate, retainingFrom: today, remaining: &remaining)
                 cursor.size = length
                 cursor.modifiedAt = modified
-                cursor.state.byDay = cursor.state.byDay.filter { $0.key >= today }
+                cursor.state.retain(from: today, calendar: calendar)
                 state.files[url] = cursor
                 complete = complete && finished
-                if seen.insert(file: url), seen.insert(sessionID: cursor.state.sessionID) {
-                    points.append(contentsOf: cursor.state.points.filter { calendar.isDate($0.date, inSameDayAs: reference) })
-                }
+                rollouts.append(TokenRolloutEvidence(url: url, state: cursor.state))
             }
             homes[root] = state
             guard complete, !Task.isCancelled else { return nil }
-            let result = TokenUsageAggregator(calendar: calendar, dayCount: 1).aggregate(dailyPoints: points, generatedAt: reference)
-            return TokenUsageSnapshot(generatedAt: reference, dailyPoints: result.dailyPoints, today: result.today,
-                last7Days: result.last7Days, last30Days: result.last30Days, totalSessions: result.totalSessions,
-                averageTokensPerSession: result.averageTokensPerSession, recordedDates: [today])
+            return rollouts
         } catch { return nil }
     }
 
     /// 바이트 상한 내의 추가 기록을 읽고 완결된 행만 숫자 집계에 반영
-    private func advance(url: URL, cursor: inout Cursor, length: UInt64, directoryDate: Date?, remaining: inout Int) throws -> Bool {
+    private func advance(url: URL, cursor: inout Cursor, length: UInt64, directoryDate: Date?,
+                         retainingFrom firstDay: Date, remaining: inout Int) throws -> Bool {
         guard cursor.offset < length else { return true }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
@@ -137,7 +140,7 @@ public actor TodayTokenUsageProvider: TokenUsageTodayProvider {
                 if byte == 10 {
                     if !cursor.discarding {
                         if line.last == 13 { line.removeLast() }
-                        parser.accumulate(line, state: &cursor.state, directoryDate: directoryDate)
+                        parser.accumulate(line, state: &cursor.state, directoryDate: directoryDate, retainingFrom: firstDay)
                     }
                     line.removeAll(keepingCapacity: true)
                     cursor.discarding = false

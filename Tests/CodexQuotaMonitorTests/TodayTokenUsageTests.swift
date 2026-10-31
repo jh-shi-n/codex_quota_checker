@@ -108,8 +108,8 @@ final class TodayTokenUsageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.home.appendingPathComponent("missing/state_5.sqlite").path))
     }
 
-    /// 오늘 합계 교체가 과거 기록을 보존하고 실패·중복 수집 시 기존 값 유지 여부 검증
-    func testLiveMergePreservesHistoryAndDoesNotDoubleCountOrRegress() async throws {
+    /// 오늘 합계의 하향 정정·과거 기록 보존·실패 시 마지막 성공 유지 검증
+    func testLiveMergeReplacesCorrectedTotalsAndPreservesHistory() async throws {
         let fixture = try TodayUsageFixture()
         defer { fixture.remove() }
         let date = now
@@ -132,14 +132,14 @@ final class TodayTokenUsageTests: XCTestCase {
         XCTAssertEqual(repeated?.last7Days.inputTokens, 22)
         await live.set(source(input: 2))
         let lower = await cache.refreshToday(accountID: "C1", home: fixture.home)
-        XCTAssertEqual(lower?.today.inputTokens, 15)
+        XCTAssertEqual(lower?.today.inputTokens, 2)
         await live.set(nil)
         let failed = await cache.refreshToday(accountID: "C1", home: fixture.home)
-        XCTAssertEqual(failed?.today.inputTokens, 15)
+        XCTAssertEqual(failed?.today.inputTokens, 2)
         let restarted = TokenUsageSnapshotCache(databaseURL: database, accountHomes: ["C1": fixture.home],
             now: { date }, calendar: calendar, historyDatabaseURL: history)
         let restored = await restarted.cachedSnapshot(for: "C1")
-        XCTAssertEqual(restored?.last7Days.inputTokens, 22)
+        XCTAssertEqual(restored?.last7Days.inputTokens, 9)
     }
 
     /// 계정 무효화와 보관 정책 변경 이후 늦게 끝난 당일 집계의 저장 차단 검증

@@ -289,11 +289,7 @@ public actor TokenUsageSnapshotCache {
         guard let incoming = collected.dailyPoints.first(where: { calendar.isDate($0.date, inSameDayAs: today) })
         else { return previous }
         let old = previous?.dailyPoints.first(where: { calendar.isDate($0.date, inSameDayAs: today) })
-        let cached = [old?.cachedInputTokens, incoming.cachedInputTokens].compactMap { $0 }.max()
-        let point = TokenUsageDailyPoint(date: today,
-            inputTokens: max(old?.inputTokens ?? 0, incoming.inputTokens),
-            outputTokens: max(old?.outputTokens ?? 0, incoming.outputTokens),
-            cachedInputTokens: cached, sessionCount: max(old?.sessionCount ?? 0, incoming.sessionCount))
+        let point = TokenUsageDailyPoint(date: today, totals: incoming.totals, sessionCount: incoming.sessionCount)
         if old == point, previous?.recordedDates?.contains(today) == true { return previous }
         let points = history == nil
             ? (previous?.dailyPoints.filter { !calendar.isDate($0.date, inSameDayAs: today) } ?? []) + [point]

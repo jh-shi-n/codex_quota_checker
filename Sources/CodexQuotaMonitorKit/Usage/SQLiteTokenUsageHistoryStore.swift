@@ -45,7 +45,9 @@ final class SQLiteTokenUsageHistoryStore: @unchecked Sendable {
             let known = snapshot.recordedDates.map { Set($0.map { dayKey($0, calendar: calendar) }) }
             for point in snapshot.dailyPoints where point.date >= cutoff && point.date <= now {
                 let key = dayKey(point.date, calendar: calendar)
-                guard known == nil || known!.contains(key) else { continue }
+                let reconstructable = known?.contains(key)
+                    ?? (point.inputTokens > 0 || point.outputTokens > 0 || point.sessionCount > 0 || key == today)
+                guard reconstructable else { continue }
                 try execute(db, """
                     INSERT INTO token_daily_history VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(account_id, day) DO UPDATE SET
@@ -53,11 +55,9 @@ final class SQLiteTokenUsageHistoryStore: @unchecked Sendable {
                     cached_input_tokens=excluded.cached_input_tokens, session_count=excluded.session_count,
                     updated_at=excluded.updated_at
                     WHERE excluded.updated_at >= token_daily_history.updated_at
-                    AND (excluded.input_tokens > 0 OR excluded.output_tokens > 0
-                    OR excluded.session_count > 0 OR excluded.day = ?)
                     """, [.text(accountID), .text(key), .integer(point.inputTokens), .integer(point.outputTokens),
                           point.cachedInputTokens.map(Value.integer) ?? .null, .integer(point.sessionCount),
-                          .real(snapshot.generatedAt.timeIntervalSince1970), .text(today)])
+                          .real(snapshot.generatedAt.timeIntervalSince1970)])
             }
             try deleteExpired(db, options: options, now: now, calendar: calendar)
             try execute(db, "COMMIT")

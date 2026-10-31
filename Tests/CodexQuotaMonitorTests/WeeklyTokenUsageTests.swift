@@ -31,6 +31,23 @@ final class WeeklyTokenUsageTests: XCTestCase {
         }
     }
 
+    /// 재구성된 0 사용량 하향 반영과 미수집 과거 행 보존 검증
+    func testCorrectedZeroReplacesOnlyRecordedDays() throws {
+        try withStore { store, _ in
+            let now = date(2026, 10, 23)
+            let yesterday = date(2026, 10, 22)
+            _ = try store.merge(snapshot([point(yesterday, 80), point(now, 12)], now: now),
+                accountID: "C1", homeIdentity: "/fixture", options: .init(), now: now, calendar: calendar)
+            let correction = TokenUsageSnapshot(generatedAt: now.addingTimeInterval(1),
+                dailyPoints: [point(yesterday, 0), point(now, 0)], recordedDates: [now])
+            let updated = try store.merge(correction, accountID: "C1", homeIdentity: "/fixture",
+                options: .init(), now: now.addingTimeInterval(1), calendar: calendar)
+
+            XCTAssertEqual(updated.dailyPoints.first { $0.date == yesterday }?.inputTokens, 80)
+            XCTAssertEqual(updated.today.inputTokens, 0)
+        }
+    }
+
     /// 재시작과 14일 캐시 만료 후에도 일별 기록을 보존하는지 검증
     func testHistorySurvivesRestartAndSnapshotExpiry() async throws {
         let root = try directory()
