@@ -128,12 +128,12 @@ public final class QuotaRefreshCoordinator {
         return windows
     }
 
-    /// 조회 경과에 비례한 이동을 제외한 1분 초과의 갑작스러운 일정 변경 판별
+    /// 조회 경과에 비례한 이동을 제외한 1분 이상의 갑작스러운 일정 변경 판별
     public static func hasLargeChange(previous: AccountState?, current: AccountState) -> Bool {
         !largeChangeWindows(previous: previous, current: current).isEmpty
     }
 
-    /// 1분 초과의 갑작스러운 변경에 해당하는 한도 반환
+    /// 1분 이상의 갑작스러운 변경에 해당하는 한도 반환
     public static func largeChangeWindows(previous: AccountState?, current: AccountState) -> [EarlyQuotaReset.Window] {
         guard let previous, previous.acceptsIdentity(of: current) else { return [] }
         let elapsed = current.lastUpdated.flatMap { latest in previous.lastUpdated.map { latest.timeIntervalSince($0) } }
@@ -144,7 +144,7 @@ public final class QuotaRefreshCoordinator {
         ] {
             guard let old, let new else { continue }
             let delta = new.timeIntervalSince(old)
-            if abs(delta) > 60 && (elapsed.map({ abs(delta - $0) > 60 }) ?? true) { windows.append(window) }
+            if abs(delta) >= 60 && (elapsed.map({ abs(delta - $0) > 60 }) ?? true) { windows.append(window) }
         }
         return windows
     }

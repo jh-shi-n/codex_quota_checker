@@ -88,12 +88,12 @@ enum AccountDashboardPresentation {
 /// Pure formatting and semantic helpers shared by the dashboard and focused
 /// presentation tests.  They never access account files or invoke a service.
 public enum AccountDashboardFormatting {
-    /// 정상·로딩 상태의 유효한 고정 관측만 초기화 일정으로 표시
+    /// Claude 공식 예정 시각과 Codex 고정 관측 시각의 구분 표시
     public static func observedResetDate(
         _ resetAt: Date?, observation: ResetTimeObservation,
-        status: AccountStatus, now: Date = Date()
+        status: AccountStatus, now: Date = Date(), provider: AccountProvider = .codex
     ) -> Date? {
-        guard [.normal, .loading].contains(status), observation == .stableObserved,
+        guard [.normal, .loading].contains(status), provider == .claude || observation == .stableObserved,
               let resetAt, resetAt.timeIntervalSince1970.isFinite, resetAt > now else { return nil }
         return resetAt
     }
@@ -101,11 +101,14 @@ public enum AccountDashboardFormatting {
     /// 미확인·변동·만료·실패 상태의 일정 확정 오인 방지 문구
     public static func resetScheduleStatusText(
         _ resetAt: Date?, observation: ResetTimeObservation,
-        status: AccountStatus, now: Date = Date()
+        status: AccountStatus, now: Date = Date(), provider: AccountProvider = .codex
     ) -> String {
         guard [.normal, .loading].contains(status) else { return "초기화 시각 조회 미확인" }
         guard let resetAt, resetAt.timeIntervalSince1970.isFinite else { return "초기화 시각 미확인" }
         guard resetAt > now else { return "초기화 시각 재확인 필요" }
+        if provider == .claude {
+            return status == .loading ? "저장된 CLI 예정 시각 · 분 단위" : "CLI 제공 예정 시각 · 분 단위"
+        }
         switch observation {
         case .stableObserved: return "할당량 시간 고정"
         case .movingObserved: return "초기화 시각 변동 중"
@@ -123,7 +126,7 @@ public enum AccountDashboardFormatting {
     /// 현재 할당량 제목 옆의 5시간 한도 안내; 이동·실패·만료·7일 한도 제외
     public static func fiveHourResetNotice(for account: AccountState, now: Date = Date()) -> String? {
         guard let reset = observedResetDate(account.primaryResetAt,
-            observation: account.primaryResetObservation, status: account.status, now: now) else { return nil }
+            observation: account.primaryResetObservation, status: account.status, now: now, provider: account.provider) else { return nil }
         let remaining = remainingTimeText(until: reset, now: now)
         return "\(remaining) 뒤 5시간 할당량이 초기화될 예정입니다."
     }
