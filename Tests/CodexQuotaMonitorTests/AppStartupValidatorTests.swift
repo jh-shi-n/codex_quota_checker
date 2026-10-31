@@ -21,11 +21,21 @@ final class AppStartupValidatorTests: XCTestCase {
         try PropertyListSerialization.data(fromPropertyList: metadata, format: .xml, options: 0)
             .write(to: contents.appendingPathComponent("Info.plist"))
         for name in ["app-update.sh", "token-history-schema.sql", "menu-bar-template.svg",
-                     "probe-airplane.svg", "service-status-smile.svg", "service-status-sad.svg"] {
+                     "probe-airplane.svg", "service-status-smile.svg", "service-status-sad.svg",
+                        "settings-tab-general.svg", "settings-tab-accounts.svg",
+                        "settings-tab-display.svg", "settings-tab-notifications.svg"] {
             try Data("fixture".utf8).write(to: resources.appendingPathComponent(name))
         }
         let bundle = try XCTUnwrap(Bundle(url: app))
         XCTAssertNoThrow(try AppStartupValidator.validate(bundle: bundle))
+        for tab in SettingsTab.allCases {
+            let icon = resources.appendingPathComponent(tab.resourceName + ".svg")
+            try FileManager.default.removeItem(at: icon)
+            XCTAssertThrowsError(try AppStartupValidator.validate(bundle: bundle)) { error in
+                XCTAssertEqual((error as? AppOperationFailure)?.code, .startupResources)
+            }
+            try Data("fixture".utf8).write(to: icon)
+        }
         try FileManager.default.removeItem(at: resources.appendingPathComponent("app-update.sh"))
         XCTAssertThrowsError(try AppStartupValidator.validate(bundle: bundle)) { error in
             XCTAssertEqual((error as? AppOperationFailure)?.code, .startupResources)

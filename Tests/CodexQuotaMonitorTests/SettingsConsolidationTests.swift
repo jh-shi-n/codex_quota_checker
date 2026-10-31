@@ -9,6 +9,71 @@ import XCTest
 /// 표시 정책 변경과 계정 편집의 저장 경계 검증
 @MainActor
 final class SettingsConsolidationTests: XCTestCase {
+    /// 탭 제목·순서와 전용 SVG 이름의 고정 계약 검증
+    func testSettingsTabsKeepApprovedOrderAndTitles() {
+        XCTAssertEqual(SettingsTab.allCases, [.general, .accounts, .display, .notifications])
+        XCTAssertEqual(SettingsTab.allCases.map(\.title), ["일반", "계정", "표시", "알림"])
+        XCTAssertEqual(SettingsTab.allCases.map(\.resourceName), [
+            "settings-tab-general", "settings-tab-accounts", "settings-tab-display", "settings-tab-notifications"
+        ])
+        for tab in SettingsTab.allCases {
+            XCTAssertEqual(SettingsTab.loadIcon(named: tab.resourceName)?.isTemplate, true)
+        }
+        XCTAssertNil(SettingsTab.loadIcon(named: "missing-settings-tab"))
+    }
+
+    /// 임시 설치 번들의 SVG 로드 및 패키지 번들 대체 경로 미호출 검증
+    func testSettingsTabIconLoadsInstalledBundleWithoutFallback() throws {
+        let resources = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let bundle = resources.appendingPathComponent("CodexQuotaMonitor_CodexQuotaMonitorKit.bundle")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: resources) }
+        let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+          <rect width="24" height="24" fill="black"/>
+        </svg>
+        """
+        try svg.write(to: bundle.appendingPathComponent("settings-tab-general.svg"), atomically: true, encoding: .utf8)
+
+        let image = SettingsTab.loadIcon(named: "settings-tab-general", resourcesURL: resources) {
+            XCTFail("설치 번들이 있으면 패키지 번들 조회 금지")
+            return Bundle.main
+        }
+
+        let loaded = try XCTUnwrap(image)
+        XCTAssertTrue(loaded.isValid)
+        XCTAssertTrue(loaded.isTemplate)
+        XCTAssertEqual(loaded.size.width, 24)
+        XCTAssertEqual(loaded.size.height, 24)
+    }
+
+    /// 설정 표기 변환 후에도 내부 ID와 공용 기본 이름 유지 검증
+    func testSettingsSlotLabelsDoNotChangeInternalIDs() {
+        let ids = PreferencesStore.stableAccountIDs
+        XCTAssertEqual(ids.map(SettingsAccountLabel.slot), ["슬롯1", "슬롯2", "슬롯3", "슬롯4"])
+        XCTAssertEqual(ids, ["C1", "C2", "C3", "C4"])
+        XCTAssertEqual(AccountDisplayName.resolved("", slotID: "C1"), "C1")
+        XCTAssertEqual(SettingsAccountLabel.slot("other"), "other")
+    }
+
+    /// 빈 경로와 제공자별 메타데이터의 배지 매핑 검증
+    func testSettingsProviderBadgesUseExistingDetection() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertEqual(SettingsAccountLabel.providerBadge(path: "  "), "비어 있음")
+        XCTAssertEqual(SettingsAccountLabel.providerBadge(path: root.path), "Codex")
+        try Data().write(to: root.appendingPathComponent(".credentials.json"))
+        XCTAssertEqual(SettingsAccountLabel.providerBadge(path: root.path), "Claude")
+        try Data().write(to: root.appendingPathComponent("auth.json"))
+        XCTAssertEqual(SettingsAccountLabel.providerBadge(path: root.path), "Codex")
+    }
+
+    /// 두 제공자와 독립·비공식 관계를 포함한 앱 정보 검증
+    func testSettingsFooterCoversBothProviders() {
+        XCTAssertEqual(SettingsView.footerText, "OpenAI 및 Anthropic과 제휴 관계가 없는 비공식 독립 프로젝트입니다.")
+    }
+
     /// 이전 옵션 복원과 표시 방식 변경에서 형태·날짜 범위 유지 검증
     func testDisplayModeKeepsLegacyEncodingAndPreservesChartStyle() throws {
         for (enabled, style, expected) in [
