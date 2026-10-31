@@ -54,6 +54,7 @@ public final class AccountStore: ObservableObject {
     private var inFlightFetches: [FetchKey: FetchHandle] = [:]
     private var activeFetches: [UUID: FetchHandle] = [:]
     private var shuttingDown = false
+    private var initialRestoreTask: Task<Void, Never>?
     private var appliedRequestIDs: [String: UUID] = [:]
     private var latestRequestIDs: [String: UUID] = [:]
     private var refreshRecoveryStates: [String: AccountState] = [:]
@@ -74,6 +75,7 @@ public final class AccountStore: ObservableObject {
     public init(
         configs: [AccountConfig] = AccountConfig.defaultAccounts(),
         preferencesStore: PreferencesStore? = nil,
+        claudeCacheService: ClaudeQuotaService = ClaudeQuotaService(),
         stateLoader: @escaping AccountStateLoader = { config in
             await AccountQuotaService.state(for: config)
         }
@@ -96,11 +98,38 @@ public final class AccountStore: ObservableObject {
                 return restored
             }
         }
+        let legacyConfigs = normalized.filter {
+            $0.isConfigured && $0.provider == .claude && FileManager.default.fileExists(atPath: ClaudeQuotaSnapshot.file(home: $0.home).path)
+        }
+        if !legacyConfigs.isEmpty {
+            initialRestoreTask = Task { [weak self] in
+                await resolvedPreferencesStore.waitForCacheIO()
+                for config in legacyConfigs {
+                    guard let self, !Task.isCancelled, !self.shuttingDown else { return }
+                    if resolvedPreferencesStore.quotaSnapshot(for: config.home)?.provider == .claude { continue }
+                    let execution = Task.detached { claudeCacheService.stateSync(for: config) }
+                    let restored = await withTaskCancellationHandler { await execution.value } onCancel: { execution.cancel() }
+                    guard !Task.isCancelled, !self.shuttingDown, self.configs.contains(config),
+                          restored.status == .normal, restored.lastUpdated != nil,
+                          let index = self.states.firstIndex(where: { $0.id == config.id && $0.isWaitingForRefresh }) else { continue }
+                    self.saveVerifiedSnapshot(restored)
+                    var initial = Self.initialState(for: config, preferencesStore: resolvedPreferencesStore)
+                    initial.configurationGeneration = self.states[index].configurationGeneration
+                    self.states[index] = initial
+                }
+            }
+        }
     }
 
     /// Compatibility alias for hosts that call the published snapshots
     /// account states.
     public var accountStates: [AccountState] { states }
+
+    /// SQLite 복원·이전 Claude 파일 이관 완료 후 시작 조회 기준 확보
+    public func waitForInitialCache() async {
+        await initialRestoreTask?.value
+        await preferencesStore.waitForCacheIO()
+    }
 
     /// 큰 일정 변경 직후 이전 고정 근거 제거 및 재확인 상태 저장
     public func beginResetVerification(
@@ -210,14 +239,14 @@ public final class AccountStore: ObservableObject {
 
     /// 검증 결과와 계정 식별 정보를 같은 경로 캐시에 저장
     private func saveVerifiedSnapshot(_ state: AccountState) {
-        guard state.provider == .codex,
-              let config = configs.first(where: { $0.id == state.id }), state.status == .normal else { return }
+        guard let config = configs.first(where: { $0.id == state.id }), state.status == .normal else { return }
         preferencesStore.updateQuotaSnapshot(for: config.home, snapshot: .init(
             usedPercent: state.primaryUsedPercent, remainingPercent: state.primaryRemainingPercent,
             resetAt: state.primaryResetAt, secondaryUsedPercent: state.secondaryUsedPercent,
             secondaryRemainingPercent: state.secondaryRemainingPercent, secondaryResetAt: state.secondaryResetAt,
             resetCredits: state.resetCredits, lastUpdated: state.lastUpdated, email: state.email, planType: state.planType,
-            primaryResetEvidence: state.primaryResetEvidence, secondaryResetEvidence: state.secondaryResetEvidence))
+            primaryResetEvidence: state.primaryResetEvidence, secondaryResetEvidence: state.secondaryResetEvidence,
+            provider: state.provider))
     }
 
     /// Stable left-side C1/C2 snapshots for the notch layout.
@@ -240,6 +269,7 @@ public final class AccountStore: ObservableObject {
     /// state without cancelling sibling tasks.
     public func refreshAll() async {
         guard !Task.isCancelled, !shuttingDown else { return }
+        await initialRestoreTask?.value
         await preferencesStore.waitForCacheIO()
         guard !Task.isCancelled, !shuttingDown else { return }
         if configs.contains(where: \.isConfigured) { onQuotaRefreshStarted?() }
@@ -294,6 +324,7 @@ public final class AccountStore: ObservableObject {
     /// 같은 조회를 공유한 호출은 화면 적용 세대가 달라도 성공 결과 공유
     public func refreshOutcome(accountID id: String, forceFresh: Bool = false) async -> RefreshOutcome {
         guard !Task.isCancelled, !shuttingDown else { return .superseded }
+        await initialRestoreTask?.value
         await preferencesStore.waitForCacheIO()
         guard !Task.isCancelled, !shuttingDown else { return .superseded }
         guard let config = configs.first(where: { $0.id == id }) else { return .notConfigured }
@@ -470,7 +501,11 @@ public final class AccountStore: ObservableObject {
                 logger.record(.quotaRefreshStarted, operationID: operationID, accountID: config.id,
                               fields: [.requestID: .identifier(requestID.uuidString),
                                        .generation: .integer(revision), .forceFresh: .boolean(forceFresh)])
-                var result = await Self.fetch(config: config, previous: previous, loader: loader)
+                var result = await DiagnosticLogContext.$logger.withValue(logger) {
+                    await DiagnosticLogContext.$operationID.withValue(operationID) {
+                        await Self.fetch(config: config, previous: previous, loader: loader)
+                    }
+                }
                 result.requestID = requestID
                 result.operationID = operationID
                 var fields = DiagnosticLogContext.resetFields(before: previous, after: result.state)
@@ -507,6 +542,7 @@ public final class AccountStore: ObservableObject {
     /// 앱 종료 시 덮어쓴 이전 조회까지 취소하고 제한시간 내 자식 종료 대기
     public func shutdown(timeout: TimeInterval = 2) async {
         shuttingDown = true
+        initialRestoreTask?.cancel()
         let handles = Array(activeFetches.values)
         for handle in handles { handle.task.cancel() }
         let deadline = Date().addingTimeInterval(timeout)
@@ -544,8 +580,12 @@ public final class AccountStore: ObservableObject {
                 )
             }
             state.provider = config.provider
-            if state.provider == .codex, Self.shouldPreservePreviousSnapshot(for: state.status) {
-                state = Self.mergedNonNormalState(state, previous: previous, id: config.id)
+            if Self.shouldPreservePreviousSnapshot(for: state.status) {
+                if state.provider == .claude {
+                    state = Self.mergedClaudeFailure(state, previous: previous)
+                } else {
+                    state = Self.mergedNonNormalState(state, previous: previous, id: config.id)
+                }
             }
             return AccountFetchResult(config: config, state: state)
         } catch {
@@ -571,6 +611,25 @@ public final class AccountStore: ObservableObject {
         case .notConfigured, .normal, .loading, .loginRequired, .codexNotFound:
             return false
         }
+    }
+
+    /// 동일 로그인 계정의 조회 실패 시 유효 캐시 보완 및 만료 구간의 재등장 차단
+    nonisolated private static func mergedClaudeFailure(_ returned: AccountState, previous: AccountState?) -> AccountState {
+        guard let previous, returned.email == nil || previous.email == returned.email else { return returned }
+        var state = returned
+        state.email = returned.email ?? previous.email
+        state.planType = returned.planType ?? previous.planType
+        let now = Date()
+        if state.primaryUsedPercent == nil, previous.primaryResetAt.map({ $0 > now }) == true {
+            state.primaryUsedPercent = previous.primaryUsedPercent
+            state.primaryResetAt = previous.primaryResetAt
+        }
+        if state.secondaryUsedPercent == nil, previous.secondaryResetAt.map({ $0 > now }) == true {
+            state.secondaryUsedPercent = previous.secondaryUsedPercent
+            state.secondaryResetAt = previous.secondaryResetAt
+        }
+        state.lastUpdated = returned.lastUpdated ?? previous.lastUpdated
+        return state
     }
 
     nonisolated private static func mergedNonNormalState(
@@ -701,10 +760,6 @@ public final class AccountStore: ObservableObject {
         logQuotaResult(.quotaResultApplied, result: result)
         guard result.config.isConfigured, result.state.status == .normal else { return }
         let resetNotification = EarlyQuotaReset.notification(accountID: state.id, changes: changes, now: observationNow())
-        if state.provider == .claude {
-            if let resetNotification { onEarlyQuotaReset?(resetNotification) }
-            return
-        }
         preferencesStore.updateQuotaSnapshot(
             for: result.config.home,
             snapshot: PreferencesStore.QuotaSnapshot(
@@ -718,7 +773,8 @@ public final class AccountStore: ObservableObject {
                 lastUpdated: result.state.lastUpdated,
                 email: state.email, planType: state.planType,
                 primaryResetEvidence: state.primaryResetEvidence,
-                secondaryResetEvidence: state.secondaryResetEvidence
+                secondaryResetEvidence: state.secondaryResetEvidence,
+                provider: state.provider
             )
         )
         if let resetNotification {
@@ -778,13 +834,10 @@ public final class AccountStore: ObservableObject {
         guard config.isConfigured else {
             return AccountState.notConfigured(id: config.id)
         }
-        if config.provider == .claude {
-            var state = AccountState(id: config.id, status: .loading, provider: .claude)
-            state.isWaitingForRefresh = true
-            return state
-        }
-        guard let snapshot = preferencesStore.quotaSnapshot(for: config.home) else {
+        guard let snapshot = preferencesStore.quotaSnapshot(for: config.home),
+              (snapshot.provider ?? .codex) == config.provider else {
             var state = AccountState.loading(id: config.id)
+            state.provider = config.provider
             state.isWaitingForRefresh = true
             return state
         }
@@ -800,8 +853,13 @@ public final class AccountStore: ObservableObject {
             secondaryResetAt: snapshot.secondaryResetAt,
             resetCredits: snapshot.resetCredits,
             lastUpdated: snapshot.lastUpdated,
-            status: .loading
+            status: .loading,
+            provider: config.provider
         )
+        if config.provider == .claude, snapshot.primaryResetAt.map({ $0 <= Date() }) == true {
+            state.primaryUsedPercent = 100
+            state.primaryResetAt = nil
+        }
         state.isWaitingForRefresh = true
         if let evidence = snapshot.primaryResetEvidence, evidence.matches(state.primaryResetAt) {
             state.primaryResetEvidence = evidence

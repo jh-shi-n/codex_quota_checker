@@ -33,6 +33,8 @@ public final class QuotaRefreshCoordinator {
     public func refresh(accountID: String, startup: Bool = false) async {
         guard !Task.isCancelled, running.insert(accountID).inserted else { return }
         defer { running.remove(accountID) }
+        await store.waitForInitialCache()
+        guard !Task.isCancelled else { return }
         let previous = store.state(for: accountID)
         await store.refresh(accountID: accountID, forceFresh: true)
         guard !Task.isCancelled, var first = store.state(for: accountID) else { return }

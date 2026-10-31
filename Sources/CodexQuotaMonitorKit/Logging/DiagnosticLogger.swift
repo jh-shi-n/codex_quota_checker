@@ -960,6 +960,7 @@ public enum DiagnosticEvent: String, CaseIterable, Sendable {
     case processFinished
     case quotaRefreshStarted
     case quotaRefreshFinished
+    case claudeUsageQueryFinished
     case quotaResultApplied
     case quotaResultDiscarded
     case accountReconfigured

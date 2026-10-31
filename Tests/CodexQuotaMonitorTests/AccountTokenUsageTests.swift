@@ -132,6 +132,35 @@ final class AccountTokenUsageTests: XCTestCase {
         XCTAssertEqual(third.snapshot(for: account), snapshot)
     }
 
+    /// Claude 로컬 집계의 재시작 복원·5분 재진입 제한·수동 갱신·실패 보존 검증
+    func testClaudeLocalCacheUsesSharedRefreshAndPersistencePolicy() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("usage.sqlite")
+        let homes = ["C1": directory.appendingPathComponent(".claude")]
+        let account = AccountState(id: "C1", email: "claude@example.test", status: .normal, provider: .claude)
+        let original = try AccountTokenUsage(result: payload(date: "2026-10-23"), accountEmail: account.email, source: .claudeLocal)
+        let first = AccountTokenUsageStore(databaseURL: database)
+        first.restore(accounts: [account], homes: homes)
+        await first.waitForPersistence()
+        first.loader = { _ in .success(original) }
+        await first.refresh(for: account)?.value
+        first.invalidateAll()
+        let second = AccountTokenUsageStore(databaseURL: database)
+        second.restore(accounts: [account], homes: homes)
+        await second.waitForPersistence()
+        XCTAssertEqual(second.snapshot(for: account), original)
+        var calls = 0
+        second.loader = { _ in calls += 1; return .failure(.timeout) }
+        await second.refresh(for: account)?.value
+        XCTAssertNil(second.refresh(for: account))
+        XCTAssertEqual(calls, 1)
+        await second.refresh(for: account, force: true)?.value
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(second.snapshot(for: account), original)
+        XCTAssertTrue(second.hasFailed(for: account))
+    }
+
     /// 슬롯·경로·로그인 계정 변경 시 다른 계정의 정상 캐시와 표시 범위 격리
     func testPersistentSnapshotSeparatesHomesAndLoginIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
