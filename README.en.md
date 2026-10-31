@@ -2,8 +2,8 @@
 
 [KOR](README.md) | **ENG**
 
-- View quotas and usage for up to four Codex accounts in the macOS menu bar and notch
-- An unofficial, independent app built with Codex
+- View quotas, session activity, and token usage for Codex and Claude accounts across up to four slots in the macOS menu bar and notch
+- An unofficial, independent app built with Codex/Claude
 
 ## Screenshots
 
