@@ -111,13 +111,6 @@ struct AccountTokenUsageView: View {
         .environment(\.timeZone, AccountUsageCalendar.calendar.timeZone)
         .task(id: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") {
             await store.refresh(for: account)?.value
-            if account.provider == .claude {
-                while !Task.isCancelled {
-                    do { try await Task.sleep(for: .seconds(15)) } catch { break }
-                    guard !Task.isCancelled else { break }
-                    await store.refresh(for: account, force: true)?.value
-                }
-            }
         }
         .onChange(of: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") { _, _ in
             selectedDate = nil

@@ -21,6 +21,28 @@ final class ClaudeUsageQueryTests: XCTestCase {
         XCTAssertThrowsError(try ClaudeUsageQuery.decode(text: "unexpected format", now: now))
     }
 
+    /// 만료된 5시간 구간의 독립 제외와 유효 주간 구간 보존 검증
+    func testExpiredWindowDoesNotDiscardValidWeeklyUsage() throws {
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-31T08:50:02Z"))
+        for reset in ["Oct 31 at 5:50pm", "5:50pm"] {
+            let text = "Current session: 42% used · resets \(reset) (Asia/Seoul)\nCurrent week (all models): 13% used · resets Oct 31 at 7pm (Asia/Seoul)"
+            let rates = try ClaudeUsageQuery.decode(text: text, now: now)
+            XCTAssertNil(rates["five_hour"])
+            XCTAssertEqual(rates["seven_day"]?["used_percentage"], 13)
+        }
+        XCTAssertThrowsError(try ClaudeUsageQuery.decode(text: "Current session: 42% used · resets Oct 31 at 5:50pm (Asia/Seoul)", now: now)) {
+            XCTAssertEqual($0 as? ClaudeQuotaError, .staleUsage)
+        }
+    }
+
+    /// 연말의 다음 해 초기화 시각과 잘못된 시각의 구분 검증
+    func testYearBoundaryAndMalformedResetRemainDistinct() throws {
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-12-31T14:00:00Z"))
+        let text = "Current session: 1% used · resets Jan 1 at 1am (Asia/Seoul)"
+        XCTAssertNotNil(try ClaudeUsageQuery.decode(text: text, now: now)["five_hour"])
+        XCTAssertThrowsError(try ClaudeUsageQuery.decode(text: "Current session: 1% used · resets invalid (Asia/Seoul)", now: now))
+    }
+
     /// 명시한 실제 폴더에서 새 조회 시각과 서버 비율 수신 검증
     func testRealOfficialUsageWhenConfigured() async throws {
         guard let path = ProcessInfo.processInfo.environment["CLAUDE_QUERY_LIVE_HOME"] else { throw XCTSkip("실계정 조회 폴더 미지정") }

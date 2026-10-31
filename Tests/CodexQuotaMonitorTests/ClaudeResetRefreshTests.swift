@@ -31,7 +31,7 @@ final class ClaudeResetRefreshTests: XCTestCase {
         XCTAssertEqual(h.loads, 4)
         XCTAssertEqual(h.alerts.count, 2)
         XCTAssertTrue(h.alerts.last?.body.contains("시각 변경을 확인") == true)
-        XCTAssertNil(h.preferences.quotaSnapshot(for: h.home))
+        XCTAssertEqual(h.preferences.quotaSnapshot(for: h.home)?.provider, .claude)
         await h.scheduler.tick(now: h.now)
         XCTAssertEqual(h.alerts.count, 2)
         h.scheduler.reconcile(states: [updated], reminderMinutes: 5, now: h.now)
@@ -53,7 +53,7 @@ final class ClaudeResetRefreshTests: XCTestCase {
         await h.checks.refresh(accountID: "C1")
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events.first?.windows, [.primary])
-        XCTAssertNil(h.preferences.quotaSnapshot(for: h.home))
+        XCTAssertEqual(h.preferences.quotaSnapshot(for: h.home)?.provider, .claude)
     }
 
     /// 5시간·주간 동시 초기화의 알림별 1회 전달 검증
@@ -116,7 +116,7 @@ final class ClaudeResetRefreshTests: XCTestCase {
         XCTAssertNil(h.store.state(for: "C1")?.primaryRemainingPercent)
     }
 
-    /// 초기화 후 새 구간 없는 0% 표시의 재조회 상한·조기 알림 차단·도달 알림 중복 방지 검증
+    /// 초기화 후 새 구간 없는 잔여량 100% 표시의 재조회 상한·알림 중복 방지 검증
     func testExpiredFiveHourWithoutNewWindowHasBoundedRetryAndNotifications() async throws {
         let h = try ClaudeResetHarness()
         defer { h.cleanUp() }
@@ -127,7 +127,7 @@ final class ClaudeResetRefreshTests: XCTestCase {
         h.scheduler.reconcile(states: [initial], reminderMinutes: 0, now: h.now)
         h.advance(600)
         h.missingLoads = Set(3...10)
-        h.zeroMissingPrimary = true
+        h.expiredMissingPrimary = true
         await h.scheduler.tick(now: h.now)
         let updated = try XCTUnwrap(h.store.state(for: "C1"))
         XCTAssertEqual(updated.primaryUsedPercent, 0)
@@ -196,7 +196,7 @@ private final class ClaudeResetHarness {
     var failedLoads: Set<Int> = []
     var loads = 0
     var missingLoads: Set<Int> = []
-    var zeroMissingPrimary = false
+    var expiredMissingPrimary = false
     var delays: [TimeInterval] = []
     var alerts: [QuotaResetAlert] = []
     var changeAccountDuringSleep = false
@@ -232,7 +232,7 @@ private final class ClaudeResetHarness {
             return AccountState(id: config.id, email: "fixture@example.test", planType: "pro", status: .timeout, provider: .claude)
         }
         return AccountState(id: config.id, email: "fixture@example.test", planType: "pro",
-            primaryUsedPercent: missing ? (zeroMissingPrimary ? 0 : nil) : used, secondaryUsedPercent: weekUsed,
+            primaryUsedPercent: missing ? (expiredMissingPrimary ? 0 : nil) : used, secondaryUsedPercent: weekUsed,
             primaryResetAt: missing ? nil : reset, secondaryResetAt: weekReset,
             lastUpdated: now, status: .normal, provider: .claude)
     }

@@ -39,6 +39,7 @@ public final class PreferencesStore: ObservableObject {
         public let planType: String?
         public let primaryResetEvidence: ResetTimeEvidence?
         public let secondaryResetEvidence: ResetTimeEvidence?
+        public let provider: AccountProvider?
 
         public var primaryUsedPercent: Double? { usedPercent }
         public var primaryRemainingPercent: Double? { remainingPercent }
@@ -56,7 +57,8 @@ public final class PreferencesStore: ObservableObject {
             email: String? = nil,
             planType: String? = nil,
             primaryResetEvidence: ResetTimeEvidence? = nil,
-            secondaryResetEvidence: ResetTimeEvidence? = nil
+            secondaryResetEvidence: ResetTimeEvidence? = nil,
+            provider: AccountProvider? = .codex
         ) {
             self.usedPercent = usedPercent.map(AccountState.clampPercent)
             self.remainingPercent = remainingPercent.map(AccountState.clampPercent)
@@ -70,6 +72,7 @@ public final class PreferencesStore: ObservableObject {
             self.planType = planType
             self.primaryResetEvidence = primaryResetEvidence
             self.secondaryResetEvidence = secondaryResetEvidence
+            self.provider = provider
         }
     }
 

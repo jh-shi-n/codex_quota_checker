@@ -114,7 +114,12 @@ public struct ClaudeQuotaService: Sendable {
         } catch {
             var state = await Task.detached { stateSync(for: config) }.value
             if state.status == .normal {
-                state.status = (error as? ClaudeQuotaError) == .loginRequired ? .loginRequired : .error
+                switch error as? ClaudeQuotaError {
+                case .loginRequired: state.status = .loginRequired
+                case .timeout: state.status = .timeout
+                case .cliMissing: state.status = .codexNotFound
+                default: state.status = .error
+                }
                 state.errorMessage = (error as? ClaudeQuotaError)?.errorDescription ?? "Claude 사용량 조회를 완료하지 못했습니다."
             }
             return state
@@ -152,7 +157,7 @@ public struct ClaudeQuotaService: Sendable {
             } else if active.values.contains(where: { now.timeIntervalSince($0.observedAt) > 900 }) {
                 state.errorMessage = "마지막으로 확인한 사용량입니다. 우상단 새로고침으로 현재 사용량을 다시 조회해 주세요."
             } else if primaryReset {
-                state.errorMessage = "5시간 한도가 초기화된 뒤 아직 새 사용 기록이 없습니다."
+                state.errorMessage = "5시간 한도가 만료되어 새 한도를 확인 중입니다. 확인 전까지 잔여량 100%로 표시합니다."
             } else {
                 state.errorMessage = "공식 Claude /usage 조회로 확인한 계정 전체 사용량입니다. 새로고침 시 서버 사용량을 다시 확인합니다."
             }

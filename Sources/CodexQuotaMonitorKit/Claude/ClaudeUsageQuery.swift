@@ -13,7 +13,23 @@ public actor ClaudeUsageQuery {
     public func refresh(home: URL, cli: ClaudeCLI) async throws {
         let key = home.resolvingSymlinksInPath().path
         if let request = requests[key] { return try await request.value }
-        let request = Task.detached { try Self.run(home: home, cli: cli) }
+        let logger = DiagnosticLogContext.logger
+        let operationID = DiagnosticLogContext.operationID
+        let request = Task.detached {
+            try DiagnosticLogContext.$logger.withValue(logger) {
+                try DiagnosticLogContext.$operationID.withValue(operationID) {
+                    do {
+                        try Self.run(home: home, cli: cli)
+                        DiagnosticLogContext.record(.claudeUsageQueryFinished, fields: [.status: .identifier("normal")])
+                    } catch {
+                        let reason = (error as? ClaudeQuotaError).map { String(describing: $0) } ?? "unexpected"
+                        DiagnosticLogContext.record(.claudeUsageQueryFinished, level: .error,
+                            fields: [.status: .identifier("error"), .reason: .identifier(reason)])
+                        throw error
+                    }
+                }
+            }
+        }
         requests[key] = request
         defer { requests[key] = nil }
         try await request.value
@@ -49,6 +65,7 @@ public actor ClaudeUsageQuery {
         let expression = try NSRegularExpression(pattern: pattern)
         let string = text as NSString
         var result: [String: [String: Double]] = [:]
+        var expired = false
         for match in expression.matches(in: text, range: NSRange(location: 0, length: string.length)) {
             let title = string.substring(with: match.range(at: 1))
             let key = title.lowercased() == "current session" ? "five_hour" : "seven_day"
@@ -56,10 +73,11 @@ public actor ClaudeUsageQuery {
                   let percent = Double(string.substring(with: match.range(at: 2))), (0...100).contains(percent),
                   let zone = TimeZone(identifier: string.substring(with: match.range(at: 4))),
                   let reset = resetDate(string.substring(with: match.range(at: 3)), zone: zone, now: now),
-                  reset > now, reset.timeIntervalSince(now) <= (key == "five_hour" ? 6 * 3600 : 8 * 86400) else { throw ClaudeQuotaError.invalidData }
+                  reset.timeIntervalSince(now) <= (key == "five_hour" ? 6 * 3600 : 8 * 86400) else { throw ClaudeQuotaError.invalidData }
+            if reset <= now { expired = true; continue }
             result[key] = ["used_percentage": percent, "resets_at": reset.timeIntervalSince1970]
         }
-        guard !result.isEmpty else { throw ClaudeQuotaError.liveQueryFailed }
+        guard !result.isEmpty else { throw expired ? ClaudeQuotaError.staleUsage : ClaudeQuotaError.liveQueryFailed }
         return result
     }
 
@@ -73,8 +91,10 @@ public actor ClaudeUsageQuery {
         formatter.timeZone = zone
         for format in ["MMM d 'at' h:mma yyyy", "MMM d 'at' ha yyyy"] {
             formatter.dateFormat = format
-            for candidateYear in [year, year + 1] {
-                if let value = formatter.date(from: text + " \(candidateYear)"), value > now, value.timeIntervalSince(now) <= 8 * 86400 { return value }
+            if let value = formatter.date(from: text + " \(year)") {
+                if value < now, let next = formatter.date(from: text + " \(year + 1)"),
+                   next > now, next.timeIntervalSince(now) <= 8 * 86400 { return next }
+                return value
             }
         }
         for format in ["h:mma", "ha"] {
@@ -82,7 +102,7 @@ public actor ClaudeUsageQuery {
             if let time = formatter.date(from: text) {
                 let parts = calendar.dateComponents([.hour, .minute], from: time)
                 if let date = calendar.date(bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: 0, of: now) {
-                    return date > now ? date : calendar.date(byAdding: .day, value: 1, to: date)
+                    return date
                 }
             }
         }
