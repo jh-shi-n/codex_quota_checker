@@ -116,6 +116,42 @@ final class ClaudeResetRefreshTests: XCTestCase {
         XCTAssertNil(h.store.state(for: "C1")?.primaryRemainingPercent)
     }
 
+    /// 초기화 후 새 구간 없는 0% 표시의 재조회 상한·조기 알림 차단·도달 알림 중복 방지 검증
+    func testExpiredFiveHourWithoutNewWindowHasBoundedRetryAndNotifications() async throws {
+        let h = try ClaudeResetHarness()
+        defer { h.cleanUp() }
+        var early: [EarlyQuotaReset] = []
+        h.store.onEarlyQuotaReset = { early.append($0) }
+        await h.checks.refresh(accountID: "C1", startup: true)
+        let initial = try XCTUnwrap(h.store.state(for: "C1"))
+        h.scheduler.reconcile(states: [initial], reminderMinutes: 0, now: h.now)
+        h.advance(600)
+        h.missingLoads = Set(3...10)
+        h.zeroMissingPrimary = true
+        await h.scheduler.tick(now: h.now)
+        let updated = try XCTUnwrap(h.store.state(for: "C1"))
+        XCTAssertEqual(updated.primaryUsedPercent, 0)
+        XCTAssertEqual(updated.primaryRemainingPercent, 100)
+        XCTAssertNil(updated.primaryResetAt)
+        XCTAssertEqual(updated.primaryResetObservation, .checking)
+        XCTAssertEqual(h.loads, 4)
+        XCTAssertEqual(h.delays, [3, 3])
+        XCTAssertTrue(early.isEmpty)
+        let changes = QuotaResetChange.detect(previous: initial, current: updated, now: h.now)
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?.cause, .scheduled)
+        XCTAssertNil(EarlyQuotaReset.notification(accountID: "C1", changes: changes, now: h.now))
+        XCTAssertEqual(h.alerts.count, 1)
+        XCTAssertFalse(h.alerts[0].body.contains("시각 변경을 확인"))
+        h.scheduler.reconcile(states: [updated], reminderMinutes: 0, now: h.now)
+        await h.scheduler.tick(now: h.now)
+        await h.checks.refresh(accountID: "C1")
+        XCTAssertEqual(h.loads, 5)
+        XCTAssertEqual(h.delays, [3, 3])
+        XCTAssertEqual(h.alerts.count, 1)
+        XCTAssertTrue(early.isEmpty)
+    }
+
     /// 초기화 대기 중 계정 변경의 이전 계정 추가 조회 차단 검증
     func testAccountChangeDuringRetryCancelsOldRead() async throws {
         let h = try ClaudeResetHarness()
@@ -160,6 +196,7 @@ private final class ClaudeResetHarness {
     var failedLoads: Set<Int> = []
     var loads = 0
     var missingLoads: Set<Int> = []
+    var zeroMissingPrimary = false
     var delays: [TimeInterval] = []
     var alerts: [QuotaResetAlert] = []
     var changeAccountDuringSleep = false
@@ -195,7 +232,7 @@ private final class ClaudeResetHarness {
             return AccountState(id: config.id, email: "fixture@example.test", planType: "pro", status: .timeout, provider: .claude)
         }
         return AccountState(id: config.id, email: "fixture@example.test", planType: "pro",
-            primaryUsedPercent: missing ? nil : used, secondaryUsedPercent: weekUsed,
+            primaryUsedPercent: missing ? (zeroMissingPrimary ? 0 : nil) : used, secondaryUsedPercent: weekUsed,
             primaryResetAt: missing ? nil : reset, secondaryResetAt: weekReset,
             lastUpdated: now, status: .normal, provider: .claude)
     }

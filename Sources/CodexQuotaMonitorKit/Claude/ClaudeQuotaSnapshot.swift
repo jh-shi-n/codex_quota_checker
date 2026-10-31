@@ -33,13 +33,13 @@ public struct ClaudeQuotaSnapshot: Codable, Equatable, Sendable {
         return snapshot
     }
 
-    /// 독립 구간 누락 시 기존 미만료 값 보존, 잘못된 숫자·문맥 사용률 제외
+    /// 독립 구간 누락 시 미만료 값·5시간 초기화 근거 보존, 잘못된 숫자·문맥 사용률 제외
     public static func merging(input: Data, identity: String, previous: Self?, now: Date = Date()) throws -> Self? {
         guard input.count <= 1_048_576,
               let payload = try JSONSerialization.jsonObject(with: input) as? [String: Any] else { throw ClaudeQuotaError.invalidData }
         guard let rates = payload["rate_limits"] as? [String: Any] else { return nil }
         var snapshot = Self(identity: identity, windows: previous?.identity == identity ? previous!.windows : [:])
-        snapshot.windows = snapshot.windows.filter { $0.value.resetsAt > now }
+        snapshot.windows = snapshot.windows.filter { $0.key == "five_hour" || $0.value.resetsAt > now }
         var received = false
         for key in ["five_hour", "seven_day"] {
             guard let value = rates[key] as? [String: Any] else { continue }
@@ -121,7 +121,7 @@ public struct ClaudeQuotaService: Sendable {
         }
     }
 
-    /// 현재 계정 지문과 일치하는 미만료 구간만 기존 화면 상태로 변환
+    /// 계정 지문이 일치하는 유효 구간과 만료된 5시간 한도의 초기화 상태 표시
     public func stateSync(for config: AccountConfig, now: Date = Date()) -> AccountState {
         guard config.isConfigured else { return .notConfigured(id: config.id) }
         var state = AccountState(id: config.id, status: .normal, provider: .claude)
@@ -135,20 +135,24 @@ public struct ClaudeQuotaService: Sendable {
                 return state
             }
             let windows = snapshot.windows.filter {
-                $0.value.resetsAt > now && $0.value.observedAt <= now.addingTimeInterval(30)
+                $0.value.resetsAt.timeIntervalSince1970.isFinite && $0.value.observedAt <= now.addingTimeInterval(30)
                 && $0.value.usedPercentage.isFinite && (0...100).contains($0.value.usedPercentage)
             }
-            let primary = windows["five_hour"]
-            let secondary = windows["seven_day"]
-            state.primaryUsedPercent = primary?.usedPercentage
+            let active = windows.filter { $0.value.resetsAt > now }
+            let primary = active["five_hour"]
+            let secondary = active["seven_day"]
+            let primaryReset = windows["five_hour"].map { $0.resetsAt <= now } == true
+            state.primaryUsedPercent = primaryReset ? 0 : primary?.usedPercentage
             state.primaryResetAt = primary?.resetsAt
             state.secondaryUsedPercent = secondary?.usedPercentage
             state.secondaryResetAt = secondary?.resetsAt
-            state.lastUpdated = windows.values.map(\.observedAt).min()
-            if windows.isEmpty {
+            state.lastUpdated = active.values.map(\.observedAt).min()
+            if active.isEmpty && !primaryReset {
                 state.errorMessage = "초기화 이후 새 사용량을 확인하지 못했습니다. 우상단 새로고침으로 다시 조회해 주세요."
-            } else if windows.values.contains(where: { now.timeIntervalSince($0.observedAt) > 900 }) {
+            } else if active.values.contains(where: { now.timeIntervalSince($0.observedAt) > 900 }) {
                 state.errorMessage = "마지막으로 확인한 사용량입니다. 우상단 새로고침으로 현재 사용량을 다시 조회해 주세요."
+            } else if primaryReset {
+                state.errorMessage = "5시간 한도가 초기화된 뒤 아직 새 사용 기록이 없습니다."
             } else {
                 state.errorMessage = "공식 Claude /usage 조회로 확인한 계정 전체 사용량입니다. 새로고침 시 서버 사용량을 다시 확인합니다."
             }
