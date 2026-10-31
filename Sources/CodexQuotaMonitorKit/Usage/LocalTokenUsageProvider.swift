@@ -53,9 +53,11 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
 
     /// 홈별 기존 읽기 상한을 유지하며 세션·파일 중복을 제거한 합산
     public func snapshot(homes: [URL]) async -> TokenUsageSnapshot {
-        var dailyPoints: [TokenUsageDailyPoint] = []
+        var rollouts: [TokenRolloutEvidence] = []
         var seen = LocalSessionDeduplicator()
         let generatedAt = now()
+        let today = calendar.startOfDay(for: generatedAt)
+        let firstDay = calendar.date(byAdding: .day, value: -(aggregator.dayCount - 1), to: today) ?? today
         for home in homes {
             guard !Task.isCancelled else {
                 return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: .cancelled)
@@ -100,8 +102,9 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
                 for candidate in scan.files {
                     try Task.checkCancellation()
                     guard seen.insert(file: candidate.url) else { continue }
-                    let parsed = try parseRollout(candidate, fileManager: fileManager, remainingBytes: &remainingBytes)
-                    if seen.insert(sessionID: parsed.sessionID) { dailyPoints.append(contentsOf: parsed.points) }
+                    let parsed = try parseRollout(candidate, fileManager: fileManager, remainingBytes: &remainingBytes,
+                        retainingFrom: firstDay)
+                    rollouts.append(TokenRolloutEvidence(url: candidate.url, state: parsed))
                 }
                 try Task.checkCancellation()
             } catch {
@@ -110,7 +113,13 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
                 return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: failure)
             }
         }
-        return aggregator.aggregate(dailyPoints: dailyPoints, generatedAt: generatedAt)
+        let points = reconciledDailyPoints(rollouts, generatedAt: generatedAt)
+        let result = aggregator.aggregate(dailyPoints: points, generatedAt: generatedAt)
+        let recordedDates = Set(rollouts.flatMap { $0.state.coverageDays }).union([today]).sorted()
+        return TokenUsageSnapshot(generatedAt: result.generatedAt, dailyPoints: result.dailyPoints, today: result.today,
+            last7Days: result.last7Days, last30Days: result.last30Days, totalSessions: result.totalSessions,
+            averageTokensPerSession: result.averageTokensPerSession, availability: result.availability,
+            error: result.error, recordedDates: recordedDates)
     }
 
     private struct RolloutCandidate {
@@ -194,28 +203,46 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
     private func parseRollout(
         _ candidate: RolloutCandidate,
         fileManager: FileManager,
-        remainingBytes: inout Int
+        remainingBytes: inout Int,
+        retainingFrom firstDay: Date
     ) throws -> TokenRolloutAccumulator {
         guard fileManager.isReadableFile(atPath: candidate.url.path) else { throw CocoaError(.fileReadNoPermission) }
         var state = TokenRolloutAccumulator()
         try readJSONLines(at: candidate.url, remainingBytes: &remainingBytes) { line in
-            accumulate(line, state: &state, directoryDate: candidate.directoryDate)
+            accumulate(line, state: &state, directoryDate: candidate.directoryDate, retainingFrom: firstDay)
         }
         return state
     }
 
-    /// 전체 집계와 증분 집계가 공유하는 누적 카운터 증가분 계산
-    func accumulate(_ line: [UInt8], state: inout TokenRolloutAccumulator, directoryDate: Date?) {
+    /// 전체 집계와 증분 집계가 공유하는 응답·누계 증거 추출
+    func accumulate(_ line: [UInt8], state: inout TokenRolloutAccumulator, directoryDate: Date?,
+                    retainingFrom firstDay: Date) {
         guard let object = try? JSONSerialization.jsonObject(
             with: Data(line),
             options: [.fragmentsAllowed]
         ), let root = object as? [String: Any] else {
             return
         }
-        if root["type"] as? String == "session_meta", let payload = root["payload"] as? [String: Any],
-           let id = payload["id"] as? String, !id.isEmpty { state.sessionID = id }
+        if normalizedType(root["type"]) == "session_meta", let payload = root["payload"] as? [String: Any] {
+            if let id = nonemptyString(payload["id"]) { state.sessionIDs.insert(id) }
+            if let parent = nonemptyString(payload["parent_thread_id"]) {
+                state.parentThreadIDs.insert(parent)
+                state.hasLineageBoundary = true
+            }
+            if payload["history_base"] != nil { state.hasLineageBoundary = true }
+        }
+        if normalizedType(root["type"]) == "history_base" { state.hasLineageBoundary = true }
+        if root["history_base"] != nil { state.hasLineageBoundary = true }
+
         let eventDate = timestamp(in: root)
         if state.safeDate == nil { state.safeDate = eventDate }
+        if let response = responseUsage(in: root, eventDate: eventDate ?? state.safeDate ?? directoryDate) {
+            state.responseThreadIDs.insert(response.threadID)
+            state.coverageDays.insert(calendar.startOfDay(for: response.timestamp))
+            let key = TokenUsageResponseKey(threadID: response.threadID, responseID: response.responseID)
+            state.responses[key] = state.responses[key].map { $0.merging(response) } ?? response
+        }
+
         guard isTokenCountEvent(root),
               let totals = tokenTotals(in: root),
               let date = eventDate ?? state.safeDate ?? directoryDate else {
@@ -223,19 +250,124 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
         }
 
         let day = calendar.startOfDay(for: date)
-        let delta = TokenUsageTotals(
-            inputTokens: max(0, totals.inputTokens - state.highestTotals.inputTokens),
-            outputTokens: max(0, totals.outputTokens - state.highestTotals.outputTokens),
-            cachedInputTokens: totals.cachedInputTokens.map { max(0, $0 - (state.highestTotals.cachedInputTokens ?? 0)) }
-        )
-        state.highestTotals = TokenUsageTotals(
-            inputTokens: max(state.highestTotals.inputTokens, totals.inputTokens),
-            outputTokens: max(state.highestTotals.outputTokens, totals.outputTokens),
-            cachedInputTokens: totals.cachedInputTokens.map { max(state.highestTotals.cachedInputTokens ?? 0, $0) }
-                ?? state.highestTotals.cachedInputTokens
-        )
-        state.byDay[day] = (state.byDay[day] ?? .zero).adding(delta)
+        state.coverageDays.insert(day)
+        let firstObservation = !state.hasCumulativeObservation
+        if firstObservation, state.hasLineageBoundary, day >= firstDay {
+            let seed = totals.subtracting(lastTokenUsage(in: root) ?? .zero)
+            state.lineageSeedByDay[day] = seed
+        }
+        state.hasCumulativeObservation = true
+        state.highestTotals = state.highestTotals.componentwiseMaximum(totals)
+        if day < firstDay {
+            state.priorTotals = state.priorTotals.map { $0.componentwiseMaximum(totals) } ?? totals
+        } else {
+            state.cumulativeByDay[day] = state.cumulativeByDay[day]
+                .map { $0.componentwiseMaximum(totals) } ?? totals
+            if let last = lastTokenUsage(in: root) {
+                state.firstUsageByDay[day] = state.firstUsageByDay[day]
+                    .map { $0.componentwiseMaximum(last) } ?? last
+            }
+        }
         state.latestUsageDay = max(state.latestUsageDay ?? day, day)
+    }
+
+    /// 응답과 누계 증거를 스레드별 일일 사용량으로 재조정
+    func reconciledDailyPoints(_ rollouts: [TokenRolloutEvidence], generatedAt: Date) -> [TokenUsageDailyPoint] {
+        let today = calendar.startOfDay(for: generatedAt)
+        let firstDay = calendar.date(byAdding: .day, value: -(aggregator.dayCount - 1), to: today) ?? today
+        var threads: [String: ThreadRolloutEvidence] = [:]
+        var responseDeduplicator = LocalSessionDeduplicator()
+
+        for rollout in rollouts {
+            guard let threadID = rollout.state.logicalThreadID(fileID: rollout.url.path) else { continue }
+            var thread = threads[threadID] ?? ThreadRolloutEvidence()
+            if let prior = rollout.state.priorTotals {
+                thread.priorTotals = thread.priorTotals.map { $0.componentwiseMaximum(prior) } ?? prior
+            }
+            for (day, totals) in rollout.state.cumulativeByDay where day >= firstDay && day <= today {
+                thread.cumulativeByDay[day] = thread.cumulativeByDay[day]
+                    .map { $0.componentwiseMaximum(totals) } ?? totals
+            }
+            for (day, totals) in rollout.state.firstUsageByDay where day >= firstDay && day <= today {
+                thread.firstUsageByDay[day] = thread.firstUsageByDay[day]
+                    .map { $0.componentwiseMaximum(totals) } ?? totals
+            }
+            for (day, totals) in rollout.state.lineageSeedByDay where day >= firstDay && day <= today {
+                thread.lineageSeedByDay[day] = thread.lineageSeedByDay[day]
+                    .map { $0.componentwiseMaximum(totals) } ?? totals
+            }
+            thread.hasLineageBoundary = thread.hasLineageBoundary || rollout.state.hasLineageBoundary
+            thread.hasUnboundedOrigin = thread.hasUnboundedOrigin
+                || (!rollout.state.hasLineageBoundary && rollout.state.hasCumulativeObservation)
+            if let latest = rollout.state.latestUsageDay {
+                thread.latestCumulativeDay = max(thread.latestCumulativeDay ?? latest, latest)
+            }
+            threads[threadID] = thread
+            for response in rollout.state.responses.values { responseDeduplicator.merge(response: response) }
+        }
+
+        var responseByThreadDay: [String: [Date: TokenUsageTotals]] = [:]
+        for response in responseDeduplicator.mergedResponses where response.timestamp >= firstDay && response.timestamp <= generatedAt {
+            let day = calendar.startOfDay(for: response.timestamp)
+            responseByThreadDay[response.threadID, default: [:]][day] =
+                (responseByThreadDay[response.threadID]?[day] ?? .zero).adding(response.totals)
+        }
+
+        var usageByThreadDay: [String: [Date: TokenUsageTotals]] = responseByThreadDay
+        var latestUsageDay: [String: Date] = responseByThreadDay.mapValues { $0.keys.max() ?? .distantPast }
+        for (threadID, thread) in threads {
+            var previous = thread.priorTotals
+            var latestFallbackDay: Date?
+            for day in thread.cumulativeByDay.keys.sorted() {
+                guard let totals = thread.cumulativeByDay[day] else { continue }
+                let delta: TokenUsageTotals
+                if let previous {
+                    delta = totals.subtracting(previous)
+                } else if thread.hasUnboundedOrigin {
+                    delta = totals
+                } else if let seed = thread.lineageSeedByDay[day] {
+                    delta = totals.subtracting(seed)
+                } else if thread.hasLineageBoundary {
+                    delta = thread.firstUsageByDay[day] ?? .zero
+                } else {
+                    delta = totals
+                }
+                previous = previous.map { $0.componentwiseMaximum(totals) } ?? totals
+                guard responseByThreadDay[threadID]?[day] == nil else { continue }
+                if delta.totalTokens > 0 {
+                    usageByThreadDay[threadID, default: [:]][day] =
+                        (usageByThreadDay[threadID]?[day] ?? .zero).adding(delta)
+                    latestFallbackDay = max(latestFallbackDay ?? day, day)
+                } else if thread.hasUnboundedOrigin {
+                    usageByThreadDay[threadID, default: [:]][day] =
+                        usageByThreadDay[threadID]?[day] ?? .zero
+                }
+            }
+            if responseByThreadDay[threadID] == nil {
+                if thread.hasLineageBoundary {
+                    latestUsageDay[threadID] = latestFallbackDay
+                } else if let latest = thread.latestCumulativeDay {
+                    latestUsageDay[threadID] = latest
+                }
+            } else if let latestFallbackDay {
+                latestUsageDay[threadID] = max(latestUsageDay[threadID] ?? latestFallbackDay, latestFallbackDay)
+            }
+        }
+
+        var totalsByDay: [Date: TokenUsageTotals] = [:]
+        var sessionsByDay: [Date: Int64] = [:]
+        for (threadID, days) in usageByThreadDay {
+            for (day, totals) in days {
+                totalsByDay[day] = (totalsByDay[day] ?? .zero).adding(totals)
+            }
+            if let day = latestUsageDay[threadID], day >= firstDay, day <= today {
+                sessionsByDay[day] = TokenUsageArithmetic.saturatingAdd(sessionsByDay[day] ?? 0, 1)
+            }
+        }
+        return Set(totalsByDay.keys).union(sessionsByDay.keys).sorted().map { day in
+            TokenUsageDailyPoint(date: day, totals: totalsByDay[day] ?? .zero,
+                sessionCount: sessionsByDay[day] ?? 0)
+        }
     }
 
     /// 청크별 취소 확인과 전체 파일 공통 읽기 상한을 적용하는 행 읽기
@@ -355,6 +487,51 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
                 result.append(dictionary)
             }
         }
+    }
+
+    /// 응답 ID가 있는 실제 사용량 레코드 추출
+    private func responseUsage(in root: [String: Any], eventDate: Date?) -> TokenUsageResponseRecord? {
+        guard normalizedType(root["type"]) == "token_usage_record",
+              let payload = root["payload"] as? [String: Any],
+              let threadID = nonemptyString(root["thread_id"]) ?? nonemptyString(payload["thread_id"]),
+              let responseID = nonemptyString(root["response_id"]) ?? nonemptyString(payload["response_id"]),
+              let usage = payload["usage"] as? [String: Any],
+              let date = eventDate,
+              let totals = responseTotals(in: usage) else { return nil }
+        return TokenUsageResponseRecord(threadID: threadID, responseID: responseID, timestamp: date, totals: totals)
+    }
+
+    /// 실제 응답 사용량과 별도 캐시 입력 하위 집합 추출
+    private func responseTotals(in usage: [String: Any]) -> TokenUsageTotals? {
+        let input = numericCounter(in: usage, keys: ["input_tokens", "inputTokens"])
+        let output = numericCounter(in: usage, keys: ["output_tokens", "outputTokens"])
+        guard input != nil || output != nil else { return nil }
+        let details = usage["input_tokens_details"] as? [String: Any] ?? [:]
+        let cached = numericCounter(in: usage, keys: ["cached_input_tokens", "cachedInputTokens"])
+            ?? numericCounter(in: details, keys: ["cached_tokens", "cached_input_tokens"])
+        return TokenUsageTotals(inputTokens: input ?? 0, outputTokens: output ?? 0, cachedInputTokens: cached)
+    }
+
+    /// 누계 이벤트의 마지막 요청 사용량 추출
+    private func lastTokenUsage(in root: [String: Any]) -> TokenUsageTotals? {
+        var containers: [[String: Any]] = [root]
+        if let payload = root["payload"] as? [String: Any] { containers.append(payload) }
+        if let event = root["event_msg"] as? [String: Any] { containers.append(event) }
+        for container in containers {
+            if let last = container["last_token_usage"] as? [String: Any],
+               let totals = responseTotals(in: last) { return totals }
+            if let info = container["info"] as? [String: Any],
+               let last = info["last_token_usage"] as? [String: Any],
+               let totals = responseTotals(in: last) { return totals }
+        }
+        return nil
+    }
+
+    /// 비어 있지 않은 문자열 식별자 추출
+    private func nonemptyString(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func numericCounter(
@@ -485,17 +662,104 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
 
 /// 원문을 보관하지 않는 파일별 누적 토큰·날짜 상태
 struct TokenRolloutAccumulator: Sendable {
-    var sessionID: String?
+    var sessionIDs = Set<String>()
+    var parentThreadIDs = Set<String>()
+    var responseThreadIDs = Set<String>()
+    var hasLineageBoundary = false
+    var hasCumulativeObservation = false
     var safeDate: Date?
     var highestTotals = TokenUsageTotals.zero
-    var byDay: [Date: TokenUsageTotals] = [:]
+    var priorTotals: TokenUsageTotals?
+    var cumulativeByDay: [Date: TokenUsageTotals] = [:]
+    var firstUsageByDay: [Date: TokenUsageTotals] = [:]
+    var lineageSeedByDay: [Date: TokenUsageTotals] = [:]
+    var coverageDays = Set<Date>()
+    var responses: [TokenUsageResponseKey: TokenUsageResponseRecord] = [:]
     var latestUsageDay: Date?
 
-    /// 마지막 사용 날짜에만 세션 수를 배정한 일별 숫자 반환
-    var points: [TokenUsageDailyPoint] {
-        byDay.keys.sorted().map { day in
-            TokenUsageDailyPoint(date: day, totals: byDay[day] ?? .zero,
-                sessionCount: day == latestUsageDay ? 1 : 0)
+    /// 당일 증분 수집에 필요한 누계 기준점만 유지
+    mutating func retain(from day: Date, calendar: Calendar) {
+        for (key, totals) in cumulativeByDay where key < day {
+            priorTotals = priorTotals.map { $0.componentwiseMaximum(totals) } ?? totals
         }
+        cumulativeByDay = cumulativeByDay.filter { $0.key >= day }
+        firstUsageByDay = firstUsageByDay.filter { $0.key >= day }
+        lineageSeedByDay = lineageSeedByDay.filter { $0.key >= day }
+        coverageDays = coverageDays.filter { $0 >= day }
+        responses = responses.filter { calendar.startOfDay(for: $0.value.timestamp) >= day }
+    }
+
+    /// 응답 ID 또는 유효한 세션 메타데이터에서 스레드 식별
+    func logicalThreadID(fileID: String) -> String? {
+        if responseThreadIDs.count == 1 { return responseThreadIDs.first }
+        guard sessionIDs.count == 1, let sessionID = sessionIDs.first else {
+            return sessionIDs.isEmpty && parentThreadIDs.isEmpty ? "file:\(fileID)" : nil
+        }
+        return parentThreadIDs.contains(sessionID) ? nil : sessionID
+    }
+}
+
+/// 응답 사용량의 전역 중복 키
+struct TokenUsageResponseKey: Hashable, Sendable {
+    let threadID: String
+    let responseID: String
+}
+
+/// 응답 사용량 키와 이벤트 날짜·토큰 수
+struct TokenUsageResponseRecord: Sendable {
+    let threadID: String
+    let responseID: String
+    let timestamp: Date
+    let totals: TokenUsageTotals
+
+    var key: TokenUsageResponseKey { TokenUsageResponseKey(threadID: threadID, responseID: responseID) }
+
+    /// 동일 응답 충돌 시 날짜는 고정하고 필드별 최댓값 선택
+    func merging(_ other: Self) -> Self {
+        Self(threadID: threadID, responseID: responseID, timestamp: min(timestamp, other.timestamp),
+            totals: totals.componentwiseMaximum(other.totals))
+    }
+}
+
+/// 홈·파일별로 수집한 원문 비포함 숫자 증거
+struct TokenRolloutEvidence: Sendable {
+    let url: URL
+    let state: TokenRolloutAccumulator
+}
+
+/// 스레드 전체에서 병합된 누계 증거
+private struct ThreadRolloutEvidence {
+    var priorTotals: TokenUsageTotals?
+    var cumulativeByDay: [Date: TokenUsageTotals] = [:]
+    var firstUsageByDay: [Date: TokenUsageTotals] = [:]
+    var lineageSeedByDay: [Date: TokenUsageTotals] = [:]
+    var hasLineageBoundary = false
+    var hasUnboundedOrigin = false
+    var latestCumulativeDay: Date?
+}
+
+extension TokenUsageTotals {
+    /// 복사된 누계의 필드별 최댓값 선택
+    func componentwiseMaximum(_ other: Self) -> Self {
+        let cached: Int64?
+        if cachedInputTokens == nil && other.cachedInputTokens == nil {
+            cached = nil
+        } else {
+            cached = max(cachedInputTokens ?? 0, other.cachedInputTokens ?? 0)
+        }
+        return Self(inputTokens: max(inputTokens, other.inputTokens),
+            outputTokens: max(outputTokens, other.outputTokens), cachedInputTokens: cached)
+    }
+
+    /// 누계 증가분 추출
+    func subtracting(_ previous: Self) -> Self {
+        let cached: Int64?
+        if cachedInputTokens == nil && previous.cachedInputTokens == nil {
+            cached = nil
+        } else {
+            cached = max(0, (cachedInputTokens ?? 0) - (previous.cachedInputTokens ?? 0))
+        }
+        return Self(inputTokens: max(0, inputTokens - previous.inputTokens),
+            outputTokens: max(0, outputTokens - previous.outputTokens), cachedInputTokens: cached)
     }
 }

@@ -4,6 +4,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS token_history_accounts (
     account_id TEXT PRIMARY KEY,
     home_identity TEXT NOT NULL,
+    account_identity TEXT,
     updated_at REAL NOT NULL
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS token_daily_history (

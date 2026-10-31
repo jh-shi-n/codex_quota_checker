@@ -135,6 +135,7 @@ public struct SettingsView: View {
     @State private var enabledAccountDraft: [String]
     /// 표시 순서 바인딩의 반응형 화면 초안
     @State private var accountDisplayOrderDraft: [String]
+    @State private var selectedSettingsTab: SettingsTab = .general
     private let accountPathValidator: AccountPathValidator
     private let onRetryNotificationAuthorization: () -> Void
     private let onSendNotificationTest: () -> Void
@@ -279,18 +280,19 @@ public struct SettingsView: View {
 
     /// 목적: 계정 표시·경로·갱신·시작 설정 화면 구성
     public var body: some View {
-        TabView {
-            ForEach(SettingsTab.allCases, id: \.self) { tab in
-                settingsForm {
-                    switch tab {
-                    case .general: generalSections
-                    case .accounts: accountSections
-                    case .display: displaySections
-                    case .notifications: notificationSections
-                    }
-                }
-                .tabItem { tab.label }
+        VStack(spacing: 0) {
+            SettingsTabSelector(selection: $selectedSettingsTab)
+                .frame(height: 68)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+
+            ZStack {
+                settingsTabPage(.general) { generalSections }
+                settingsTabPage(.accounts) { accountSections }
+                settingsTabPage(.display) { displaySections }
+                settingsTabPage(.notifications) { notificationSections }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(
             minWidth: Self.minimumWindowSize.width,
@@ -314,6 +316,19 @@ public struct SettingsView: View {
         .onChange(of: accountPaths) { _, paths in accountPathsDraft.synchronize(paths: paths) }
         .onChange(of: enabledAccountIDs) { _, _ in synchronizeAccountDisplayDrafts() }
         .onChange(of: accountDisplayOrder) { _, _ in synchronizeAccountDisplayDrafts() }
+    }
+
+    /// 탭별 초안과 스크롤 위치를 유지하는 설정 폼 구성
+    private func settingsTabPage<Content: View>(
+        _ tab: SettingsTab,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let isSelected = selectedSettingsTab == tab
+        return settingsForm(content: content)
+            .opacity(isSelected ? 1 : 0)
+            .allowsHitTesting(isSelected)
+            .accessibilityHidden(!isSelected)
+            .zIndex(isSelected ? 1 : 0)
     }
 
     /// 긴 탭도 창 크기 안에서 스크롤할 수 있는 공통 폼 구성

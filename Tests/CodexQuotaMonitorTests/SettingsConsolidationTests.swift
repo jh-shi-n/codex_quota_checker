@@ -2,7 +2,9 @@
 // 이용처: 표시 방식·계정 목록·외부 설정 변경의 회귀 검사
 // 사용방법: swift test --filter SettingsConsolidationTests
 // 실행 예시: 잔디·막대·선 왕복 및 외부 계정 연결과 입력 초안의 동시 변경
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import CodexQuotaMonitorKit
 
@@ -20,6 +22,31 @@ final class SettingsConsolidationTests: XCTestCase {
             XCTAssertEqual(SettingsTab.loadIcon(named: tab.resourceName)?.isTemplate, true)
         }
         XCTAssertNil(SettingsTab.loadIcon(named: "missing-settings-tab"))
+    }
+
+    /// 실제 탭 선택 버튼에 네 아이콘과 상단 이미지 배치 적용 검증
+    func testSettingsTabSelectorRendersImagesOnRadioButtons() throws {
+        let host = NSHostingView(rootView: SettingsTabSelector(selection: .constant(.general)))
+        host.frame = NSRect(x: 0, y: 0, width: 560, height: 76)
+        host.layoutSubtreeIfNeeded()
+
+        let buttons = descendants(of: host).compactMap { $0 as? NSButton }
+        for tab in SettingsTab.allCases {
+            let button = try XCTUnwrap(buttons.first {
+                $0.identifier?.rawValue == "settings-tab-\(tab.rawValue)"
+            }, tab.title)
+            XCTAssertEqual(button.title, tab.title)
+            XCTAssertEqual(button.imagePosition, .imageAbove)
+            XCTAssertTrue(try XCTUnwrap(button.image, tab.title).isValid)
+            XCTAssertEqual(button.accessibilityRole(), .radioButton)
+            XCTAssertEqual(button.accessibilityTitle(), tab.title)
+            XCTAssertEqual((button.accessibilityValue() as? NSNumber)?.intValue, tab == .general ? 1 : 0)
+        }
+    }
+
+    /// 호스팅된 탭 선택기의 네이티브 하위 뷰 탐색
+    private func descendants(of view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap { descendants(of: $0) }
     }
 
     /// 임시 설치 번들의 SVG 로드 및 패키지 번들 대체 경로 미호출 검증

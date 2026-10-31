@@ -43,12 +43,78 @@ public enum SettingsTab: String, CaseIterable, Sendable {
         loadIcon(named: tab.resourceName).map { (tab, $0) }
     })
 
-    /// 기본 macOS 탭에서 사용할 제목과 선택적 아이콘 구성
-    @MainActor @ViewBuilder var label: some View {
-        if let icon = Self.icons[self] {
-            Label { Text(title) } icon: { Image(nsImage: icon) }
-        } else {
-            Text(title)
+    /// 이미지 선택기에 표시할 탭 아이콘 제공
+    @MainActor var icon: NSImage? { Self.icons[self] }
+}
+
+/// 아이콘과 제목을 함께 표시하는 키보드 접근 가능 설정 탭 선택기
+@MainActor struct SettingsTabSelector: NSViewRepresentable {
+    @Binding var selection: SettingsTab
+
+    /// SwiftUI 선택 바인딩을 보유할 조정자 생성
+    func makeCoordinator() -> Coordinator {
+        Coordinator(selection: $selection)
+    }
+
+    /// 네이티브 이미지와 선택 상태를 가진 탭 버튼 구성
+    func makeNSView(context: Context) -> NSStackView {
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.distribution = .fillEqually
+        stack.spacing = 8
+
+        for tab in SettingsTab.allCases {
+            let button = NSButton(title: tab.title, target: context.coordinator, action: #selector(Coordinator.selectTab(_:)))
+            button.identifier = NSUserInterfaceItemIdentifier("settings-tab-\(tab.rawValue)")
+            button.setButtonType(.radio)
+            button.image = tab.icon
+            button.imagePosition = .imageAbove
+            button.imageScaling = .scaleProportionallyDown
+            button.state = selection == tab ? .on : .off
+            button.contentTintColor = selection == tab ? .controlAccentColor : .secondaryLabelColor
+            button.setAccessibilityIdentifier("settings-tab-\(tab.rawValue)")
+            button.setAccessibilityLabel(tab.title)
+            button.setAccessibilityTitle(tab.title)
+            button.setAccessibilityRole(.radioButton)
+            button.setAccessibilityValue(NSNumber(value: selection == tab ? 1 : 0))
+            stack.addArrangedSubview(button)
+        }
+        stack.setAccessibilityElement(true)
+        stack.setAccessibilityRole(.radioGroup)
+        stack.setAccessibilityLabel("설정 탭")
+        stack.setAccessibilityChildren(stack.arrangedSubviews)
+        return stack
+    }
+
+    /// SwiftUI 선택 변경을 네이티브 버튼에 반영
+    func updateNSView(_ stack: NSStackView, context: Context) {
+        context.coordinator.selection = $selection
+        for button in stack.arrangedSubviews.compactMap({ $0 as? NSButton }) {
+            guard let identifier = button.identifier?.rawValue,
+                  identifier.hasPrefix("settings-tab-"),
+                  let tab = SettingsTab(rawValue: String(identifier.dropFirst("settings-tab-".count))) else { continue }
+            button.state = selection == tab ? .on : .off
+            button.contentTintColor = selection == tab ? .controlAccentColor : .secondaryLabelColor
+            button.setAccessibilityValue(NSNumber(value: selection == tab ? 1 : 0))
+        }
+    }
+
+    /// 네이티브 버튼 선택과 SwiftUI 바인딩 연결
+    @MainActor final class Coordinator: NSObject {
+        var selection: Binding<SettingsTab>
+
+        /// 현재 선택 바인딩 저장
+        init(selection: Binding<SettingsTab>) {
+            self.selection = selection
+        }
+
+        /// 선택된 탭을 바인딩에 반영하는 네이티브 버튼 동작
+        @objc func selectTab(_ sender: NSButton) {
+            guard let identifier = sender.identifier?.rawValue,
+                  identifier.hasPrefix("settings-tab-"),
+                  let tab = SettingsTab(rawValue: String(identifier.dropFirst("settings-tab-".count))) else { return }
+            selection.wrappedValue = tab
         }
     }
 }

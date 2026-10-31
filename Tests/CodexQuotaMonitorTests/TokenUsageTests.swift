@@ -71,6 +71,88 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertTrue(TokenContributionGrid.tooltip(for: snapshot.dailyPoints.last!).contains("cache 14"))
     }
 
+    /// 응답 ID별 소비량 병합·복사 충돌·날짜 배분 및 누계 과대값 제외 검증
+    func testResponseUsageDeduplicatesCopiesAndOverridesCumulativeCounters() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: referenceDate, name: "rollout-parent.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"thread-a"}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-08-29T10:00:00Z","payload":{"thread_id":"thread-a","response_id":"resp-1","usage":{"input_tokens":10,"output_tokens":4,"input_tokens_details":{"cached_tokens":3}}}}"#,
+            #"{"timestamp":"2026-08-29T10:01:00Z","type":"token_count","usage":{"input_tokens":1000,"output_tokens":100}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-08-30T10:00:00Z","payload":{"thread_id":"thread-a","response_id":"resp-2","usage":{"input_tokens":7,"output_tokens":2,"input_tokens_details":{"cached_tokens":2}}}}"#,
+            #"{"timestamp":"2026-08-30T10:01:00Z","type":"token_count","usage":{"input_tokens":2000,"output_tokens":200}}"#,
+        ])
+        try writeRollout(in: home, date: referenceDate, name: "rollout-parent_ambiguous.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"thread-a","history_base":{"end_byte_offset":100}}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-08-29T10:00:00Z","payload":{"thread_id":"thread-a","response_id":"resp-1","usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":4}}}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-08-30T10:00:00Z","payload":{"thread_id":"thread-a","response_id":"resp-2","usage":{"input_tokens":7,"output_tokens":2,"input_tokens_details":{"cached_tokens":2}}}}"#,
+            #"{"timestamp":"2026-08-30T10:02:00Z","type":"token_count","usage":{"input_tokens":9000,"output_tokens":900}}"#,
+        ])
+        try writeRollout(in: home, date: referenceDate, name: "rollout-parent_nested.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"thread-a","history_base":{"end_byte_offset":50}}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-08-30T10:00:00Z","payload":{"thread_id":"thread-a","response_id":"resp-2","usage":{"input_tokens":7,"output_tokens":2,"input_tokens_details":{"cached_tokens":2}}}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-08-30T10:03:00Z","payload":{"thread_id":"thread-a","response_id":"resp-3","usage":{"input_tokens":5,"output_tokens":1,"input_tokens_details":{"cached_tokens":1}}}}"#,
+        ])
+
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+
+        XCTAssertEqual(snapshot.availability, .available)
+        XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.totals,
+            TokenUsageTotals(inputTokens: 12, outputTokens: 4, cachedInputTokens: 4))
+        XCTAssertEqual(snapshot.today, TokenUsageTotals(inputTokens: 12, outputTokens: 3, cachedInputTokens: 3))
+        XCTAssertEqual(snapshot.last7Days, TokenUsageTotals(inputTokens: 24, outputTokens: 7, cachedInputTokens: 7))
+        XCTAssertEqual(snapshot.totalSessions, 1)
+        XCTAssertEqual(snapshot.dailyPoints.last?.sessionCount, 1)
+    }
+
+    /// 계보 시드 제외·첫 응답 증가분·자식 스레드 분리 검증
+    func testLineageFallbackExcludesInheritedSeedAndKeepsNewUsage() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: referenceDate, name: "rollout-child.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"child-a","parent_thread_id":"parent","history_base":{"end_byte_offset":100}}}"#,
+            #"{"timestamp":"2026-08-28T10:00:00Z","type":"token_count","usage":{"input_tokens":100}}"#,
+            #"{"timestamp":"2026-08-29T10:00:00Z","type":"token_count","usage":{"input_tokens":110},"last_token_usage":{"input_tokens":10}}"#,
+            #"{"timestamp":"2026-08-30T10:00:00Z","type":"token_count","usage":{"input_tokens":130},"last_token_usage":{"input_tokens":20}}"#,
+        ])
+        try writeRollout(in: home, date: referenceDate, name: "rollout-child_early.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"child-b","parent_thread_id":"parent","history_base":{"end_byte_offset":120}}}"#,
+            #"{"timestamp":"2026-08-29T11:00:00Z","type":"token_count","usage":{"input_tokens":110},"last_token_usage":{"input_tokens":10}}"#,
+        ])
+        try writeRollout(in: home, date: referenceDate, name: "rollout-child_inherited.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"child-c","parent_thread_id":"parent"}}"#,
+            #"{"timestamp":"2026-08-30T12:00:00Z","type":"token_count","usage":{"input_tokens":100}}"#,
+        ])
+
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+
+        XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.inputTokens, 20)
+        XCTAssertEqual(snapshot.today.inputTokens, 20)
+        XCTAssertEqual(snapshot.last7Days.inputTokens, 40)
+        XCTAssertEqual(snapshot.totalSessions, 2)
+    }
+
+    /// 응답 ID 누락 시 누계 증가분만 사용하고 반복 last 사용량 제외 검증
+    func testMissingResponseIdentityFallsBackToCumulativeDeltas() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: referenceDate, name: "legacy.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"legacy-thread"}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-08-30T10:00:00Z","payload":{"thread_id":"legacy-thread","usage":{"input_tokens":999,"output_tokens":999}}}"#,
+            #"{"timestamp":"2026-08-30T10:01:00Z","type":"token_count","usage":{"input_tokens":10,"output_tokens":2},"last_token_usage":{"input_tokens":10,"output_tokens":2}}"#,
+            #"{"timestamp":"2026-08-30T10:02:00Z","type":"token_count","usage":{"input_tokens":20,"output_tokens":4},"last_token_usage":{"input_tokens":10,"output_tokens":2}}"#,
+            #"{"timestamp":"2026-08-30T10:03:00Z","type":"token_count","usage":{"input_tokens":20,"output_tokens":4},"last_token_usage":{"input_tokens":10,"output_tokens":2}}"#,
+        ])
+
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+
+        XCTAssertEqual(snapshot.today, TokenUsageTotals(inputTokens: 20, outputTokens: 4))
+        XCTAssertEqual(snapshot.totalSessions, 1)
+    }
+
     /// 캐시 미제공·실제 0·Boolean 입력 구분 검증
     @MainActor
     func testCachedInputDistinguishesUnavailableFromZeroAndRejectsBooleans() async throws {

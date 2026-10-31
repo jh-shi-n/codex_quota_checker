@@ -91,6 +91,55 @@ final class SharedCodexHomeTests: XCTestCase {
         XCTAssertEqual(single?.today.inputTokens, 7)
     }
 
+    /// 불일치 복사 응답의 홈 순서 독립성 및 전체·증분·캐시 일치 검증
+    func testUnequalCopiedResponsesAgreeAcrossHomeOrdersAndCacheRefresh() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try f.auth(f.shared)
+        try f.auth(f.slot.home)
+        try f.database(home: f.slot.home, sessions: [])
+        try f.database(home: f.shared, sessions: [])
+        try f.writeRollout(home: f.slot.home, name: "rollout-root.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"thread-a"}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-10-22T10:00:00Z","payload":{"thread_id":"thread-a","response_id":"resp-1","usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":4}}}}"#,
+            #"{"timestamp":"2026-10-22T10:01:00Z","type":"token_count","usage":{"input_tokens":100,"output_tokens":20}}"#,
+        ])
+        try f.writeRollout(home: f.shared, name: "rollout-root_continuation.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"thread-a","parent_thread_id":"parent","history_base":{"end_byte_offset":100}}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-10-22T10:00:00Z","payload":{"thread_id":"thread-a","response_id":"resp-1","usage":{"input_tokens":13,"output_tokens":3,"input_tokens_details":{"cached_tokens":6}}}}"#,
+            #"{"type":"token_usage_record","timestamp":"2026-10-23T10:00:00Z","payload":{"thread_id":"thread-a","response_id":"resp-2","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":1}}}}"#,
+            #"{"timestamp":"2026-10-23T10:01:00Z","type":"token_count","usage":{"input_tokens":999,"output_tokens":999}}"#,
+        ])
+
+        let homes = f.sources()
+        let reference = Fixture.date
+        let local = LocalTokenUsageProvider(calendar: f.calendar, now: { reference })
+        let configuredFirst = await local.snapshot(homes: homes)
+        let sharedFirst = await local.snapshot(homes: Array(homes.reversed()))
+        let todayProvider = TodayTokenUsageProvider(calendar: f.calendar, now: { reference })
+        let configuredToday = await todayProvider.todaySnapshot(homes: homes)
+        let sharedToday = await todayProvider.todaySnapshot(homes: Array(homes.reversed()))
+
+        for snapshot in [configuredFirst, sharedFirst] {
+            XCTAssertEqual(snapshot.today, TokenUsageTotals(inputTokens: 7, outputTokens: 3, cachedInputTokens: 1))
+            XCTAssertEqual(snapshot.last7Days, TokenUsageTotals(inputTokens: 20, outputTokens: 6, cachedInputTokens: 7))
+            XCTAssertEqual(snapshot.totalSessions, 1)
+        }
+        for snapshot in [configuredToday, sharedToday] {
+            XCTAssertEqual(snapshot?.today, TokenUsageTotals(inputTokens: 7, outputTokens: 3, cachedInputTokens: 1))
+            XCTAssertEqual(snapshot?.totalSessions, 1)
+        }
+
+        let cache = TokenUsageSnapshotCache(provider: local, accountHomes: [f.slot.id: f.slot.home],
+            now: { reference }, calendar: f.calendar,
+            historyDatabaseURL: f.root.appendingPathComponent("history.sqlite"),
+            todayProvider: todayProvider, sharedHomeResolver: f.resolver)
+        let refreshed = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
+        let live = await cache.refreshToday(accountID: f.slot.id, home: f.slot.home)
+        XCTAssertEqual(refreshed.last7Days, configuredFirst.last7Days)
+        XCTAssertEqual(live?.last7Days, configuredFirst.last7Days)
+    }
+
     /// 공유 세션의 과거 날짜 사용량과 오늘 사용량을 날짜별로 함께 집계하는지 검증
     func testSharedHistoryAggregates() async throws {
         let f = try Fixture()
@@ -181,27 +230,71 @@ final class SharedCodexHomeTests: XCTestCase {
         XCTAssertEqual(store.localTodaySnapshot(for: account)?.today.inputTokens, 10)
     }
 
-    /// 인증 변경 시 메모리·영속 집계 격리와 재조회 귀속 변경 검증
-    func testCacheReevaluatesLoginAndHistory() async throws {
+    /// 공유 소스 연결·해제 시 메모리 격리와 장기 기록 보존 검증
+    func testCacheReevaluatesLoginAndPreservesHistoryAcrossSharedSources() async throws {
         let f = try Fixture()
         defer { f.remove() }
         try f.prepare()
+        try f.auth(f.shared, email: "other@example.test")
         let cache = TokenUsageSnapshotCache(provider: LocalTokenUsageProvider(calendar: f.calendar, now: { Fixture.date }),
             databaseURL: f.root.appendingPathComponent("cache.sqlite"),
             accountHomes: [f.slot.id: f.slot.home, f.other.id: f.other.home], now: { Fixture.date }, calendar: f.calendar,
             historyDatabaseURL: f.root.appendingPathComponent("history.sqlite"),
             todayProvider: TodayTokenUsageProvider(calendar: f.calendar, now: { Fixture.date }), sharedHomeResolver: f.resolver)
         let first = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
-        XCTAssertEqual(first.today.inputTokens, 30)
+        XCTAssertEqual(first.today.inputTokens, 10)
         let live = await cache.refreshToday(accountID: f.slot.id, home: f.slot.home)
-        XCTAssertEqual(live?.today.inputTokens, 30)
+        XCTAssertEqual(live?.today.inputTokens, 10)
+
+        try f.auth(f.shared)
+        let beforeAttachRefresh = await cache.cachedSnapshot(for: f.slot.id)
+        XCTAssertEqual(beforeAttachRefresh?.today.inputTokens, 10)
+        let attached = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
+        XCTAssertEqual(attached.today.inputTokens, 30)
+
         try f.auth(f.shared, email: "other@example.test")
-        let stale = await cache.cachedSnapshot(for: f.slot.id)
-        XCTAssertNil(stale)
+        let beforeDetachRefresh = await cache.cachedSnapshot(for: f.slot.id)
+        XCTAssertEqual(beforeDetachRefresh?.today.inputTokens, 30)
         let own = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
         let switched = await cache.refresh(accountID: f.other.id, home: f.other.home)
         XCTAssertEqual(own.today.inputTokens, 10)
         XCTAssertEqual(switched.today.inputTokens, 37)
+    }
+
+    /// 기본 홈 계정 교체 시 이전 소유자의 장기 기록 비노출·제거 검증
+    func testCacheClearsHistoryForReplacedPrimaryAccount() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try f.auth(f.slot.home, account: "old-team", email: "old@example.test")
+        let now = Fixture.date
+        let yesterday = now.addingTimeInterval(-86_400)
+        let historyURL = f.root.appendingPathComponent("history.sqlite")
+        let oldIdentity = try XCTUnwrap(f.resolver.accountIdentity(for: f.slot))
+        let archived = TokenUsageSnapshot(generatedAt: now,
+            dailyPoints: [TokenUsageDailyPoint(date: yesterday, inputTokens: 123, outputTokens: 0, sessionCount: 1)],
+            last30Days: TokenUsageTotals(inputTokens: 123), totalSessions: 1, averageTokensPerSession: 123,
+            recordedDates: [yesterday])
+        _ = try SQLiteTokenUsageHistoryStore(databaseURL: historyURL).merge(archived, accountID: f.slot.id,
+            homeIdentity: f.slot.home.path, accountIdentity: oldIdentity, options: .init(), now: now, calendar: f.calendar)
+
+        let cache = TokenUsageSnapshotCache(provider: LocalTokenUsageProvider(calendar: f.calendar, now: { now }),
+            accountHomes: [f.slot.id: f.slot.home], now: { now }, calendar: f.calendar,
+            historyDatabaseURL: historyURL, sharedHomeResolver: f.resolver)
+        let beforeReplacement = await cache.cachedSnapshot(for: f.slot.id)
+        XCTAssertEqual(beforeReplacement?.last30Days.inputTokens, 123)
+
+        try f.auth(f.slot.home, account: "new-team", email: "new@example.test")
+        let hiddenPrevious = await cache.cachedSnapshot(for: f.slot.id)
+        XCTAssertNil(hiddenPrevious)
+        let replacement = await cache.refresh(accountID: f.slot.id, home: f.slot.home)
+        XCTAssertEqual(replacement.availability, .available)
+        XCTAssertEqual(replacement.last30Days.inputTokens, 0)
+
+        let restarted = TokenUsageSnapshotCache(accountHomes: [f.slot.id: f.slot.home], now: { now },
+            calendar: f.calendar, historyDatabaseURL: historyURL, sharedHomeResolver: f.resolver)
+        let restored = await restarted.cachedSnapshot(for: f.slot.id)
+        XCTAssertEqual(restored?.last30Days.inputTokens, 0)
+        XCTAssertFalse(restored?.recordedDates?.contains(yesterday) ?? true)
     }
 }
 
@@ -290,5 +383,12 @@ private struct Fixture {
             let sql = "INSERT INTO threads VALUES ('\(id)', \(Self.date.timeIntervalSince1970), 0, '\(id)', NULL, NULL, NULL, NULL, 'cli', '\(file.path)')"
             guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
         }
+    }
+
+    /// 임시 홈의 당일 디렉터리에 숫자 전용 JSONL 작성
+    func writeRollout(home: URL, name: String, lines: [String]) throws {
+        let directory = home.appendingPathComponent("sessions/2026/10/23")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: directory.appendingPathComponent(name))
     }
 }

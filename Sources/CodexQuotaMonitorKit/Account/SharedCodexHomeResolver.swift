@@ -36,6 +36,12 @@ public struct SharedCodexHomeResolver: Sendable {
         return SHA256.hash(data: Data(values.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// 공유 소스 변경과 분리된 기본 홈 계정 식별자 생성
+    func accountIdentity(for account: AccountConfig) -> String? {
+        guard account.provider == .codex, let identity = identity(home: account.home) else { return nil }
+        return SHA256.hash(data: Data(identity.key.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// 제한된 인증 파일에서 계정·이메일·안정 사용자 식별자만 추출
     private func identity(home: URL) -> Identity? {
         let file = home.appendingPathComponent("auth.json")
@@ -82,10 +88,10 @@ public struct SharedCodexHomeResolver: Sendable {
     }
 }
 
-/// 홈 간 세션 ID·실제 파일 식별자의 중복 읽기 방지
+/// 복사 응답과 실제 파일 식별자의 중복 제거
 struct LocalSessionDeduplicator {
     private var files = Set<String>()
-    private var sessions = Set<String>()
+    private var responses: [TokenUsageResponseKey: TokenUsageResponseRecord] = [:]
 
     /// 심볼릭 링크·하드 링크의 동일 파일 여부 확인
     mutating func insert(file: URL) -> Bool {
@@ -96,9 +102,16 @@ struct LocalSessionDeduplicator {
         return files.insert("\(device):\(inode)").inserted
     }
 
-    /// 복사된 로그의 동일 세션 ID 여부 확인
-    mutating func insert(sessionID: String?) -> Bool {
-        guard let sessionID else { return true }
-        return sessions.insert(sessionID).inserted
+    /// 동일 응답 충돌 시 필드별 최댓값 병합
+    mutating func merge(response: TokenUsageResponseRecord) {
+        responses[response.key] = responses[response.key].map { $0.merging(response) } ?? response
+    }
+
+    /// 병합 결과의 안정된 순서 반환
+    var mergedResponses: [TokenUsageResponseRecord] {
+        responses.values.sorted {
+            if $0.threadID != $1.threadID { return $0.threadID < $1.threadID }
+            return $0.responseID < $1.responseID
+        }
     }
 }
