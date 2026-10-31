@@ -81,7 +81,7 @@ final class ResetTimeObservationTests: XCTestCase {
                 XCTAssertNil(evidence)
                 XCTAssertEqual(AccountDashboardFormatting.resetScheduleStatusText(
                     reset, observation: observation ?? .stableObserved, status: .normal, now: start
-                ), "초기화 시각 확인 중")
+                ), "조회 중")
             }
         }
     }

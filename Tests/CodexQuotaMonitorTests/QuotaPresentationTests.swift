@@ -993,7 +993,7 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertNil(state.percent)
         XCTAssertNil(state.centerSymbol)
         XCTAssertFalse(state.showsErrorRing)
-        XCTAssertEqual(AccountDetailView.statusText(for: .notConfigured), "Not configured")
+        XCTAssertEqual(AccountDetailView.statusText(for: .notConfigured), "연결할 계정이 설정되지 않았습니다.")
     }
 
     func testTimeoutKeepsRemainingValueAndUsesOnlyCriticalRingPresentation() {

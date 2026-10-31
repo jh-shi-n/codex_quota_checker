@@ -27,7 +27,7 @@ final class ClaudeResetPresentationTests: XCTestCase {
             XCTAssertEqual(displayed, reset)
             XCTAssertNotEqual(AccountDashboardFormatting.remainingTimeText(until: displayed, now: now), "—")
             XCTAssertEqual(AccountDashboardFormatting.resetScheduleStatusText(reset, observation: .checking,
-                status: .normal, now: now, provider: .claude), "CLI 제공 예정 시각 · 분 단위")
+                status: .normal, now: now, provider: .claude), "고정됨")
         }
     }
 
@@ -42,7 +42,7 @@ final class ClaudeResetPresentationTests: XCTestCase {
                 status: .normal, now: now), observation == .stableObserved ? reset : nil)
         }
         XCTAssertEqual(AccountDashboardFormatting.resetScheduleStatusText(reset, observation: .checking,
-            status: .loading, now: now, provider: .claude), "저장된 CLI 예정 시각 · 분 단위")
+            status: .loading, now: now, provider: .claude), "조회 중")
         var account = AccountState(id: "C4", primaryResetAt: reset, status: .normal, provider: .claude)
         XCTAssertNotNil(AccountDashboardFormatting.fiveHourResetNotice(for: account, now: now))
         account.provider = .codex

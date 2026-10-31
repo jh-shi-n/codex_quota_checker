@@ -65,7 +65,7 @@ final class AccountStoreTests: XCTestCase {
         let active = try XCTUnwrap(store.state(for: "C1"))
         XCTAssertFalse(active.isWaitingForRefresh)
         XCTAssertTrue(active.isRefreshing)
-        XCTAssertEqual(AccountDetailView.statusText(for: active), "Loading")
+        XCTAssertEqual(AccountDetailView.statusText(for: active), "조회 중")
         await gate.release()
         await task.value
         XCTAssertEqual(store.state(for: "C1")?.status, .normal)
