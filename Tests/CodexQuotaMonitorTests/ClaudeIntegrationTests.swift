@@ -152,8 +152,8 @@ final class ClaudeIntegrationTests: XCTestCase {
             resetAt: Date().addingTimeInterval(-1), lastUpdated: Date().addingTimeInterval(-10),
             email: "first@example.test", provider: .claude))
         let expired = AccountStore(configs: [config], preferencesStore: preferences)
-        XCTAssertEqual(expired.state(for: "C1")?.primaryUsedPercent, 100)
-        XCTAssertEqual(expired.state(for: "C1")?.primaryRemainingPercent, 0)
+        XCTAssertEqual(expired.state(for: "C1")?.primaryUsedPercent, 0)
+        XCTAssertEqual(expired.state(for: "C1")?.primaryRemainingPercent, 100)
         XCTAssertEqual(expired.state(for: "C1")?.primaryResetObservation, .checking)
     }
 

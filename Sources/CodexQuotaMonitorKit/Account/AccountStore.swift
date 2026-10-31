@@ -857,7 +857,7 @@ public final class AccountStore: ObservableObject {
             provider: config.provider
         )
         if config.provider == .claude, snapshot.primaryResetAt.map({ $0 <= Date() }) == true {
-            state.primaryUsedPercent = 100
+            state.primaryUsedPercent = 0
             state.primaryResetAt = nil
         }
         state.isWaitingForRefresh = true

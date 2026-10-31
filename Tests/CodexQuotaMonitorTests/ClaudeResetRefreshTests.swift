@@ -116,7 +116,7 @@ final class ClaudeResetRefreshTests: XCTestCase {
         XCTAssertNil(h.store.state(for: "C1")?.primaryRemainingPercent)
     }
 
-    /// 초기화 후 새 구간 없는 사용률 100% 표시의 재조회 상한·알림 중복 방지 검증
+    /// 초기화 후 새 구간 없는 잔여량 100% 표시의 재조회 상한·알림 중복 방지 검증
     func testExpiredFiveHourWithoutNewWindowHasBoundedRetryAndNotifications() async throws {
         let h = try ClaudeResetHarness()
         defer { h.cleanUp() }
@@ -130,15 +130,16 @@ final class ClaudeResetRefreshTests: XCTestCase {
         h.expiredMissingPrimary = true
         await h.scheduler.tick(now: h.now)
         let updated = try XCTUnwrap(h.store.state(for: "C1"))
-        XCTAssertEqual(updated.primaryUsedPercent, 100)
-        XCTAssertEqual(updated.primaryRemainingPercent, 0)
+        XCTAssertEqual(updated.primaryUsedPercent, 0)
+        XCTAssertEqual(updated.primaryRemainingPercent, 100)
         XCTAssertNil(updated.primaryResetAt)
         XCTAssertEqual(updated.primaryResetObservation, .checking)
         XCTAssertEqual(h.loads, 4)
         XCTAssertEqual(h.delays, [3, 3])
         XCTAssertTrue(early.isEmpty)
         let changes = QuotaResetChange.detect(previous: initial, current: updated, now: h.now)
-        XCTAssertTrue(changes.isEmpty)
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?.cause, .scheduled)
         XCTAssertNil(EarlyQuotaReset.notification(accountID: "C1", changes: changes, now: h.now))
         XCTAssertEqual(h.alerts.count, 1)
         XCTAssertFalse(h.alerts[0].body.contains("시각 변경을 확인"))
@@ -231,7 +232,7 @@ private final class ClaudeResetHarness {
             return AccountState(id: config.id, email: "fixture@example.test", planType: "pro", status: .timeout, provider: .claude)
         }
         return AccountState(id: config.id, email: "fixture@example.test", planType: "pro",
-            primaryUsedPercent: missing ? (expiredMissingPrimary ? 100 : nil) : used, secondaryUsedPercent: weekUsed,
+            primaryUsedPercent: missing ? (expiredMissingPrimary ? 0 : nil) : used, secondaryUsedPercent: weekUsed,
             primaryResetAt: missing ? nil : reset, secondaryResetAt: weekReset,
             lastUpdated: now, status: .normal, provider: .claude)
     }
