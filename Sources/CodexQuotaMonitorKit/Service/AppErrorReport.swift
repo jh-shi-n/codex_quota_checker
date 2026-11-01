@@ -11,7 +11,7 @@ public enum AppErrorReport {
         let version = AppVersion.current
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         let os = ProcessInfo.processInfo.operatingSystemVersion
-        var lines = ["Codex Quota Checker 오류 정보", "앱 버전: \(version) (\(build))",
+        var lines = ["LLM Quota Checker 오류 정보", "앱 버전: \(version) (\(build))",
                      "macOS: \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)", "", message]
         if let failure {
             lines += ["", "오류코드: \(failure.code.rawValue)", "발생 식별자: \(failure.occurrenceID.uuidString)"]

@@ -363,7 +363,7 @@ public struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Text("버전 \(appVersion)")
                     .foregroundStyle(.secondary)
-                Link(destination: URL(string: "https://github.com/jh-shi-n/codex_quota_checker")!) {
+                Link(destination: URL(string: "https://github.com/jh-shi-n/llm_quota_checker")!) {
                     HStack(spacing: 5) {
                         Image(systemName: "chevron.left.slash.chevron.right")
                         Text("GitHub")
@@ -371,7 +371,7 @@ public struct SettingsView: View {
                             .font(.system(size: 9, weight: .medium))
                     }
                 }
-                .help("https://github.com/jh-shi-n/codex_quota_checker")
+                .help("https://github.com/jh-shi-n/llm_quota_checker")
                 .accessibilityLabel("GitHub 프로젝트 저장소 열기")
             }
             .font(.caption)

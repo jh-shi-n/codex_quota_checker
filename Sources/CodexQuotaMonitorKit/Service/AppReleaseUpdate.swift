@@ -70,7 +70,7 @@ public struct AppRelease: Codable, Equatable, Sendable {
 
 /// 인증·할당량·모델 실행과 무관한 공개 릴리스 전용 조회
 public enum GitHubAppReleaseClient {
-    public static let repository = "jh-shi-n/codex_quota_checker"
+    public static let repository = "jh-shi-n/llm_quota_checker"
     public static let endpoint = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
     public static var architecture: String {
         #if arch(arm64)
@@ -84,7 +84,7 @@ public enum GitHubAppReleaseClient {
     public static func fetch() async throws -> AppRelease {
         var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("CodexQuotaChecker/\(AppVersion.current)", forHTTPHeaderField: "User-Agent")
+        request.setValue("LLMQuotaChecker/\(AppVersion.current)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let response = response as? HTTPURLResponse, response.statusCode == 200, data.count <= 2_000_000 else {
             throw URLError(.badServerResponse)
@@ -99,8 +99,11 @@ public enum GitHubAppReleaseClient {
               let page = URL(string: payload.html_url), isRepositoryURL(page, prefix: "/releases/tag/") else {
             throw URLError(.cannotParseResponse)
         }
-        let expected = "CodexQuotaChecker-\(version.text)-macos-\(architecture).zip"
-        let candidate = payload.assets.first { $0.name == expected && $0.size > 0 }
+        let names = ["LLMQuotaChecker-\(version.text)-macos-\(architecture).zip",
+                     "CodexQuotaChecker-\(version.text)-macos-\(architecture).zip"]
+        let candidate = names.lazy.compactMap { name in
+            payload.assets.first { $0.name == name && $0.size > 0 }
+        }.first
         let asset: AppReleaseAsset?
         if let candidate, let url = URL(string: candidate.browser_download_url), isRepositoryURL(url, prefix: "/releases/download/") {
             asset = AppReleaseAsset(name: candidate.name, url: url, size: candidate.size, digest: candidate.digest)
@@ -122,7 +125,9 @@ public enum GitHubAppReleaseClient {
 
     /// 배포 안내·다운로드 경로의 저장소 범위 제한
     public static func isRepositoryURL(_ url: URL, prefix: String) -> Bool {
-        url.scheme == "https" && url.host == "github.com" && url.path.hasPrefix("/\(repository)\(prefix)")
+        let repositories = [repository, "jh-shi-n/codex_quota_checker", "jh-shi-n/codex_checker"]
+        return url.scheme == "https" && url.host == "github.com"
+            && repositories.contains { url.path.hasPrefix("/\($0)\(prefix)") }
             && url.user == nil && url.password == nil
     }
 

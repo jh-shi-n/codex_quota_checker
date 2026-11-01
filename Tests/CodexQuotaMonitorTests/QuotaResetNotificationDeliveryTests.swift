@@ -187,7 +187,7 @@ final class QuotaResetNotificationDeliveryTests: XCTestCase {
 
         XCTAssertEqual(delivery.status.outcome, .testDelivered)
         XCTAssertEqual(backend.delivered.count, 1)
-        XCTAssertEqual(backend.delivered.first?.title, "Codex Quota Checker 테스트 알림")
+        XCTAssertEqual(backend.delivered.first?.title, "LLM Quota Checker 테스트 알림")
         XCTAssertTrue(backend.delivered.first?.body.contains("할당량 상태는 변경되지 않습니다") == true)
         XCTAssertTrue(fallbacks.isEmpty)
         await delivery.notifyReset(makeReset())

@@ -272,7 +272,7 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
 
         do {
             try await backend?.deliver(
-                title: "Codex Quota Checker 테스트 알림",
+                title: "LLM Quota Checker 테스트 알림",
                 body: "시스템 알림 전달 확인용입니다. 할당량 상태는 변경되지 않습니다."
             )
             status = replacingDelivery(outcome: .testDelivered, error: nil)

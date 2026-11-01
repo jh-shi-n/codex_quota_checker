@@ -17,7 +17,7 @@ public enum AccountSetupWindow {
             contentRect: NSRect(origin: .zero, size: AccountSetupView.windowSize),
             styleMask: [.titled, .closable], backing: .buffered, defer: false
         )
-        window.title = "Codex Quota Checker 시작하기"
+        window.title = "LLM Quota Checker 시작하기"
         window.isReleasedWhenClosed = false
         window.contentViewController = NSHostingController(rootView: AccountSetupView(
             model: model, onComplete: onComplete, onLater: onLater

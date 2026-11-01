@@ -141,7 +141,7 @@ notify_failure() {
     if (( launch_exit != 0 )); then message+=$'\n'"실행 명령 종료코드: $launch_exit"; fi
     local diagnostics="$(/usr/bin/grep -E '^launch mode=(updated|restored) attempt=[1-3] exit=[0-9]+$' "$state_directory/attempt-$nonce.log" 2>/dev/null | /usr/bin/tail -n 6)"
     [[ -n "$diagnostics" ]] || diagnostics="관련 진단 없음"
-    local report="Codex Quota Checker 업데이트 오류 정보"$'\n'"요청 버전: $version"$'\n'"$message"$'\n\n'"해당 설치 시도 진단:"$'\n'"$diagnostics"
+    local report="LLM Quota Checker 업데이트 오류 정보"$'\n'"요청 버전: $version"$'\n'"$message"$'\n\n'"해당 설치 시도 진단:"$'\n'"$diagnostics"
     (
         for notification_wait in {1..50}; do
             [[ ! -f "$state_directory/result.json" ]] || break
@@ -192,7 +192,7 @@ cleanup() {
         else
             code=6
             recovery="backupPreserved"
-            /usr/bin/logger -t CodexQuotaChecker "UPD-006: preserved app backup at $backup"
+            /usr/bin/logger -t LLMQuotaChecker "UPD-006: preserved app backup at $backup"
         fi
     fi
     if (( ! success && ! backup_owned )) && [[ -d "$target_app" ]] && ! kill -0 "$old_pid" 2>/dev/null; then

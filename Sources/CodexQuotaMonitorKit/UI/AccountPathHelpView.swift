@@ -13,7 +13,7 @@ public enum AccountPathHelp {
 
     For Claude Code, check CLAUDE_CONFIG_DIR instead. If it is unset, check ~/.claude. Do not return the project working directory.
 
-    Verify that the directory exists. Return the confirmed absolute path on a separate line so I can paste it into Codex Quota Checker. If you cannot determine the path, explain why instead of guessing.
+    Verify that the directory exists. Return the confirmed absolute path on a separate line so I can paste it into LLM Quota Checker. If you cannot determine the path, explain why instead of guessing.
 
     Do not display authentication file contents, tokens, or API keys. Do not modify any files or application settings.
     """

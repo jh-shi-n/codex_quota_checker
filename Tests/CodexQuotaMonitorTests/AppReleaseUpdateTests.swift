@@ -22,6 +22,19 @@ final class AppReleaseUpdateTests: XCTestCase {
         let release = try GitHubAppReleaseClient.decode(payload(), architecture: "arm64")
         XCTAssertEqual(release.version, "0.1.0")
         XCTAssertEqual(release.asset?.name, "CodexQuotaChecker-0.1.0-macos-arm64.zip")
+        let root = "https://github.com/" + GitHubAppReleaseClient.repository
+        let renamed = ["name": "LLMQuotaChecker-0.1.0-macos-arm64.zip", "size": 34,
+                       "browser_download_url": root + "/releases/download/v0.1.0/LLMQuotaChecker-0.1.0-macos-arm64.zip"] as [String: Any]
+        let preferred = try GitHubAppReleaseClient.decode(payload(["assets": [renamed]]), architecture: "arm64")
+        XCTAssertEqual(preferred.asset?.name, "LLMQuotaChecker-0.1.0-macos-arm64.zip")
+        for repository in ["jh-shi-n/llm_quota_checker", "jh-shi-n/codex_quota_checker", "jh-shi-n/codex_checker"] {
+            XCTAssertTrue(GitHubAppReleaseClient.isRepositoryURL(
+                URL(string: "https://github.com/\(repository)/releases/tag/0.6.5")!, prefix: "/releases/tag/"))
+        }
+        for repository in ["someone/llm_quota_checker", "jh-shi-n/llm_quota_checker-other"] {
+            XCTAssertFalse(GitHubAppReleaseClient.isRepositoryURL(
+                URL(string: "https://github.com/\(repository)/releases/tag/0.6.5")!, prefix: "/releases/tag/"))
+        }
         XCTAssertNil(try GitHubAppReleaseClient.decode(payload(), architecture: "x86_64").asset)
         XCTAssertEqual(release.displayVersion, "0.1.0 (빌드 10)")
         XCTAssertEqual(AppVersion.display(version: "0.6.3", build: "28_test"), "0.6.3 (빌드 28_test)")
@@ -80,9 +93,9 @@ final class AppReleaseUpdateTests: XCTestCase {
 
     /// GitHub 응답과 같은 공개 메타데이터 fixture 생성
     private func payload(_ changes: [String: Any] = [:]) throws -> Data {
-        let root = "https://github.com/jh-shi-n/codex_quota_checker"
+        let root = "https://github.com/jh-shi-n/llm_quota_checker"
         var object: [String: Any] = ["tag_name": "v0.1.0", "draft": false, "prerelease": false,
-            "body": "## Codex Quota Checker 0.1.0\n\n- 앱 버전: `0.1.0`, 빌드: `10`\n- 지원 환경: Apple Silicon, macOS 14 이상",
+            "body": "## LLM Quota Checker 0.1.0\n\n- 앱 버전: `0.1.0`, 빌드: `10`\n- 지원 환경: Apple Silicon, macOS 14 이상",
             "html_url": root + "/releases/tag/v0.1.0", "assets": [
                 ["name": "CodexQuotaChecker-0.1.0-source.zip", "size": 12,
                  "browser_download_url": root + "/releases/download/v0.1.0/CodexQuotaChecker-0.1.0-source.zip"],

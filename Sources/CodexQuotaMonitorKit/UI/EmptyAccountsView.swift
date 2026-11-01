@@ -5,8 +5,8 @@ import SwiftUI
 
 /// 계정 삭제와 표시 비활성화의 안내 문구 구분
 public struct EmptyAccountsPresentation: Equatable, Sendable {
-    public static let appName = "Codex Quota Checker"
-    public static let appDescription = "Codex 계정의 남은 할당량과 초기화 시각을 메뉴 막대에서 확인하는 앱입니다."
+    public static let appName = "LLM Quota Checker"
+    public static let appDescription = "Codex·Claude 계정의 남은 할당량과 초기화 시각을 메뉴 막대에서 확인하는 앱입니다."
     public let hasRegisteredAccounts: Bool
 
     /// 경로 등록 여부를 기준으로 빈 화면 상태 구성
