@@ -7,6 +7,7 @@
 - Codex·Claude 계정을 구분 없이 조합해 총 최대 4개 연결 지원 (예: Codex 2개 + Claude 2개)
 - macOS 메뉴 막대·노치에서 연결 계정의 할당량, 세션 실행 기록, 토큰 사용량 확인
 - Codex/Claude로 제작한 비공식 독립 앱
+- 정식 릴리스: [0.6.4](https://github.com/jh-shi-n/codex_quota_checker/releases/tag/0.6.4), 빌드 `34`
 
 ## 화면 미리보기
 

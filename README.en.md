@@ -7,6 +7,7 @@
 - Connect up to four accounts in total, using any mix of Codex and Claude (for example, two Codex + two Claude accounts)
 - View connected accounts' quotas, session activity, and token usage in the macOS menu bar and notch
 - An unofficial, independent app built with Codex/Claude
+- Stable release: [0.6.4](https://github.com/jh-shi-n/codex_quota_checker/releases/tag/0.6.4), build `34`
 
 ## Screenshots
 
