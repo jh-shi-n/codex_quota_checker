@@ -32,13 +32,12 @@ struct AccountTokenUsageView: View {
     /// 집계 기준과 하단에서 분리한 조회 상태·오류 안내 구성
     private var usageHelp: String {
         if account.provider == .claude {
-            return "연결한 Claude 폴더의 로컬 기록 기준입니다. 웹·다른 기기의 사용량과 계정 전체 서버 통계는 포함하지 않습니다. 같은 폴더에서 계정을 바꿨다면 과거 계정의 기록도 포함될 수 있습니다.\n과거는 Stats 캐시를 우선하고 누락 날짜와 오늘은 세션 기록으로 보완합니다. 날짜별로 한 출처만 사용하며 OpenTelemetry 수신값을 더하지 않습니다.\n입력·출력·캐시 읽기·쓰기 합계이며 로그의 동일 응답은 중복 제거합니다. UTC 날짜 기준, 최근 12개월 기록 합계이며 미제공 날짜는 0과 구분합니다."
+            return "당일 / 이전 사용량 : 로컬 내 저장된 토큰사용량을 기반으로 표기합니다.\n해당 앱과 연결된 계정의 기록만 이용합니다.\n연결된 Claude 폴더의 로컬 기록 기준이며, 웹·다른 기기의 사용량과 계정 전체 서버 통계는 제외합니다. 폴더에서 계정을 변경한 경우 이전 계정 기록이 포함될 수 있습니다."
                 + (store.hasFailed(for: account) ? "\n로컬 집계 실패 · 마지막 정상 결과가 있으면 유지합니다." : "")
         }
         var lines = [
-            "오늘 사용량: 서버 값을 우선하고, 없으면 연결 계정의 로컬 세션 기록으로 보완",
-            "이전 날짜 사용량: 서버가 제공한 일별 사용량 기준",
-            "누적·일 최대 토큰: 서버 집계 기준",
+            "당일 사용량: 서버 값을 우선 표기, 0이거나 값을 받아오지 못할 경우 로컬 사용량 표기",
+            "해당 앱과 연결된 계정의 기록을 이용합니다.",
             "날짜는 UTC 기준이며, 미제공 내역은 0과 구분합니다."
         ]
         if model.day(at: nil).isLocal, let localToday {
@@ -88,7 +87,6 @@ struct AccountTokenUsageView: View {
                 if !options.weeklyChartEnabled { Text("(최근 24주)").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
             }
-            if account.provider == .claude { ClaudeTokenCollectionView(account: account) }
             if snapshot != nil || localToday != nil {
                 if options.weeklyChartEnabled { weeklyChart } else { heatmap }
                 HStack(spacing: 18) {
@@ -97,8 +95,8 @@ struct AccountTokenUsageView: View {
                 }
                 if account.provider == .claude && snapshot?.days?.isEmpty != false {
                     Text("로컬 토큰 기록 없음").font(.caption2).foregroundStyle(.secondary)
-                } else if let snapshot {
-                    Text("\(account.provider == .claude ? "로컬 집계" : "서버 조회") \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
+                } else if account.provider == .claude, let snapshot {
+                    Text("로컬 집계 \(AccountDashboardFormatting.dateText(snapshot.fetchedAt, dateStyle: .short, timeStyle: .short))")
                     .font(.caption2).foregroundStyle(.secondary)
                 }
             } else {
@@ -279,11 +277,11 @@ struct AccountTokenUsageView: View {
     private func detail(_ day: AccountUsageCalendar.Day) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(AccountUsageCalendar.label(day.date)).font(.caption.weight(.semibold))
-            Text(account.provider == .claude ? "폴더 토큰 합계" : "계정 토큰 합계").font(.caption).foregroundStyle(.secondary)
+            Text("사용 토큰 합계").font(.caption).foregroundStyle(.secondary)
             Text(value(day)).font(.callout.monospacedDigit())
             Text(account.provider == .claude
-                 ? (day.tokens == nil ? "이 날짜의 로컬 토큰 기록이 없습니다." : "Stats 캐시 또는 세션 기록 집계")
-                 : (day.isLocal ? "연결 계정의 로컬 사용량" : (day.tokens == nil ? "이 날짜의 서버 수치가 없습니다." : "서버 제공 사용량")))
+                 ? (day.tokens == nil ? "저장된 기록 없음." : "사용량 (로컬 기록)")
+                 : (day.isLocal ? "사용량 (로컬 기록)" : (day.tokens == nil ? "저장된 기록 없음" : "사용량 (서버 제공)")))
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(10)

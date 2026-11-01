@@ -86,6 +86,9 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
     public static let unavailable = QuotaResetNotificationDelivery(backend: nil)
 
     @Published public private(set) var status: QuotaResetNotificationStatus
+    @Published public private(set) var lastTestRequestedAt: Date?
+    @Published public private(set) var lastTestOutcome: QuotaResetNotificationOutcome = .idle
+    @Published public private(set) var lastTestError: String?
     public private(set) var isRequestingAuthorization = false
 
     private var authorizationRevision = 0
@@ -251,7 +254,17 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
 
     /// 사용자 동작으로만 테스트 알림 전달
     public func sendTestNotification() async {
+        lastTestRequestedAt = Date()
+        lastTestOutcome = .idle
+        lastTestError = nil
         guard await isAuthorizedForDelivery() else {
+            switch status.authorization {
+            case .notRequested: lastTestError = "macOS 알림 권한을 요청하지 않았습니다."
+            case .denied: lastTestError = "macOS 알림 권한이 허용되지 않았습니다."
+            case .unavailable: lastTestError = "앱 번들에서 실행해야 알림을 보낼 수 있습니다."
+            default: lastTestError = status.authorizationError ?? "macOS 알림 권한을 확인하지 못했습니다."
+            }
+            lastTestOutcome = .testFailed
             status = replacingDelivery(outcome: .testFailed, error: nil)
             onDiagnostic("test_notification_authorization_unavailable")
             return
@@ -263,9 +276,12 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
                 body: "시스템 알림 전달 확인용입니다. 할당량 상태는 변경되지 않습니다."
             )
             status = replacingDelivery(outcome: .testDelivered, error: nil)
+            lastTestOutcome = .testDelivered
             onDiagnostic("test_notification_delivered")
         } catch {
             status = replacingDelivery(outcome: .testFailed, error: AppOperationFailure(.notificationDelivery, "시스템 알림 처리에 실패했습니다.", underlying: error).localizedDescription)
+            lastTestError = status.deliveryError
+            lastTestOutcome = .testFailed
             onDiagnostic("test_notification_failed")
         }
     }

@@ -278,15 +278,30 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertNotNil(renderer.cgImage)
     }
 
-    /// 백만 경계의 한글 축약과 기존 숫자·초기화 차이 표시 검증
+    /// 한글 토큰 단위·반올림 승격 경계와 기존 숫자·초기화 차이 표시 검증
     func testDashboardNumberAndResetDeltaFormattingStayBounded() {
         XCTAssertEqual(AccountDashboardFormatting.tokenCountText(0), "0")
-        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(999_999), "999,999")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(9_999), "9,999")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(10_000), "1만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(123_456), "12.3만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(99_999), "10만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(999_499), "99.9만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(999_500), "1백만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(999_999), "1백만")
         XCTAssertEqual(AccountDashboardFormatting.tokenCountText(1_000_000), "1백만")
         XCTAssertEqual(AccountDashboardFormatting.tokenCountText(2_000_000), "2백만")
         XCTAssertEqual(AccountDashboardFormatting.tokenCountText(2_450_000), "2.4백만")
         XCTAssertEqual(AccountDashboardFormatting.tokenCountText(2_560_000), "2.6백만")
-        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(1_000_000_000), "1,000백만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(9_949_999), "9.9백만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(9_950_000), "1천만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(10_000_000), "1천만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(95_000_000), "9.5천만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(99_499_999), "9.9천만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(99_500_000), "1억")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(99_999_999), "1억")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(100_000_000), "1억")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(1_000_000_000), "10억")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(1_234_567_890), "12.3억")
         XCTAssertEqual(AccountDashboardFormatting.numberText(128_020), "128,020")
         XCTAssertEqual(AccountDashboardFormatting.abbreviatedNumber(1_200), "1.2K")
         XCTAssertEqual(AccountDashboardFormatting.abbreviatedNumber(10_000), "10K")
@@ -1143,6 +1158,13 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(SettingsView.refreshSectionTitle, "새로고침")
         XCTAssertEqual(SettingsView.launchAtLoginLabel, "로그인 시 자동 실행")
         XCTAssertEqual(SettingsView.refreshIntervalOptions, [1, 5, 10, 30])
+        XCTAssertEqual(SettingsView.notificationPermissionSectionTitle, "알림 권한 및 테스트")
+        XCTAssertEqual(SettingsView.notificationTestRecordText(requestedAt: nil), "요청된 테스트 없습니다")
+        let record = SettingsView.notificationTestRecordText(requestedAt: Date(timeIntervalSince1970: 0))
+        XCTAssertTrue(record.hasPrefix("요청 전송됨 ["))
+        XCTAssertTrue(record.hasSuffix("]"))
+        XCTAssertEqual(SettingsView.notificationTestRecordText(requestedAt: Date(), outcome: .testFailed, error: "권한 없음"), "요청 실패 : 권한 없음")
+        XCTAssertTrue(SettingsView.notificationTestRecordText(requestedAt: Date(), outcome: .idle).hasPrefix("요청 전송 중 ["))
     }
 
     func testSettingsPresentationFallsBackOnlyWhenActionIsUnhandledAndReusesFallback() {

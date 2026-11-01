@@ -29,8 +29,8 @@ final class AccountTokenFallbackTests: XCTestCase {
         XCTAssertNil(model.day(at: AccountUsageCalendar.date("2026-10-24")).tokens)
     }
 
-    /// 서버의 실제 0과 갱신된 당일 수치가 로컬 보완보다 우선하는지 검증
-    func testServerZeroSkipsLocalAndReplacesEarlierFallback() async throws {
+    /// 서버의 당일 0은 로컬로 보완하고 양수로 갱신되면 서버 우선 복원 검증
+    func testServerZeroLoadsLocalUntilPositiveServerUsageArrives() async throws {
         let reference = now
         let store = AccountTokenUsageStore(now: { reference })
         let account = AccountState(id: "C1", status: .normal)
@@ -44,11 +44,22 @@ final class AccountTokenFallbackTests: XCTestCase {
         XCTAssertNotNil(store.localTodaySnapshot(for: account))
         store.loader = { _ in .success(zero) }
         await store.refresh(for: account, force: true)?.value
-        XCTAssertEqual(calls, 1)
-        XCTAssertNil(store.localTodaySnapshot(for: account))
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(store.snapshot(for: account), zero)
+        XCTAssertEqual(store.localTodaySnapshot(for: account), local)
         let model = AccountUsageCalendar(snapshot: zero, localToday: local, now: now)
-        XCTAssertEqual(model.day(at: nil).tokens, 0)
-        XCTAssertFalse(model.day(at: nil).isLocal)
+        XCTAssertEqual(model.day(at: nil).tokens, 900)
+        XCTAssertTrue(model.day(at: nil).isLocal)
+        XCTAssertEqual(AccountUsageCalendar(snapshot: zero, now: now).day(at: nil).tokens, 0)
+
+        let positive = try usage([("2026-10-26", 100)])
+        store.loader = { _ in .success(positive) }
+        await store.refresh(for: account, force: true)?.value
+        XCTAssertEqual(calls, 2)
+        XCTAssertNil(store.localTodaySnapshot(for: account))
+        let updated = AccountUsageCalendar(snapshot: positive, localToday: local, now: now)
+        XCTAssertEqual(updated.day(at: nil).tokens, 100)
+        XCTAssertFalse(updated.day(at: nil).isLocal)
     }
 
     /// 서버 실패·일별 필드 미제공도 당일만 보완하고 로컬 실패를 0으로 표시하지 않는지 검증

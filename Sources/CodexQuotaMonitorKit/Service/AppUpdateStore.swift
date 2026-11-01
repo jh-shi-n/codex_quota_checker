@@ -17,6 +17,8 @@ public final class AppUpdateStore: ObservableObject {
     @Published public private(set) var isInstalling = false
     @Published public private(set) var installationError: String?
     public let currentVersion: String
+    public let currentBuild: String?
+    public var currentVersionDisplay: String { AppVersion.display(version: currentVersion, build: currentBuild) }
     private let defaults: UserDefaults
     private let fetch: AppReleaseFetch
     private let now: () -> Date
@@ -31,13 +33,15 @@ public final class AppUpdateStore: ObservableObject {
     private static let cacheKey = "CodexQuotaMonitor.appUpdateCache"
 
     /// 설치 버전과 저장된 공개 릴리스 캐시 복원
-    public init(currentVersion: String = AppVersion.current, defaults: UserDefaults = .standard,
+    public init(currentVersion: String = AppVersion.current, currentBuild: String? = AppVersion.build,
+                defaults: UserDefaults = .standard,
                 fetch: @escaping AppReleaseFetch = GitHubAppReleaseClient.fetch,
                 now: @escaping () -> Date = { Date() },
                 presentFailure: @escaping @MainActor (String, AppOperationFailure?) -> Void = {
                     AppErrorPresenter.present(title: "업데이트 실패했습니다", message: $0, failure: $1)
                 }) {
         self.currentVersion = currentVersion
+        self.currentBuild = currentBuild
         self.defaults = defaults
         self.fetch = fetch
         self.now = now
