@@ -1,10 +1,10 @@
 # Codex Quota Checker
 
-> [26.10.31] In accordance with Codex and Claude policies on using multiple accounts, connecting multiple accounts for the same service on a single device is not recommended.
+> **[2026-10-31]** In accordance with Codex's policy on using multiple paid accounts on a single device, registering multiple accounts for the same service in this app is not recommended.
 
 [KOR](README.md) | **ENG**
 
-- Connect up to four accounts in total, using any mix of Codex and Claude (for example, two Codex + two Claude accounts)
+- Connect up to four Codex and Claude accounts in total, in any combination
 - View connected accounts' quotas, session activity, and token usage in the macOS menu bar and notch
 - An unofficial, independent app built with Codex/Claude
 - Stable release: [0.6.4](https://github.com/jh-shi-n/codex_quota_checker/releases/tag/0.6.4), build `34`
@@ -15,40 +15,49 @@
 
 ### Menu bar and notch account display
 
-<img src="assets/screenshots/quota-cluster.png" alt="Account donuts showing remaining quotas and names for two accounts" width="220">
+- Choose a slot style: ring, number + horizontal bars, number + vertical bars, or stacked numbers
+
+<img src="assets/screenshots/quota-cluster.png" alt="Codex and Claude slots showing remaining five-hour and weekly quotas in four styles" width="424">
 
 ### Account details
 
-- Five-hour and overall quotas, 24-week token usage grid, session activity, and reset-time controls
+- Five-hour and weekly account quotas, 24-week token usage grid, session activity, and reset-time controls
 
 <img src="assets/screenshots/account-detail.png" alt="Account details showing quota rings and the token usage contribution grid" width="640">
 
 ### Settings
 
-<img src="assets/screenshots/settings.png" alt="Settings for automatic refresh intervals and account folders" width="640">
+<img src="assets/screenshots/settings.png" alt="Accounts settings tab for per-slot account folders, visibility, names, and order" width="560">
 
 ## Features
 
 | Feature | Description |
 |---|---|
-| Quota monitoring | Remaining five-hour and overall quotas, reset times, and countdowns |
-| Account management | Connect up to four accounts in total, mixing Codex and Claude or using either alone; configure names, visibility, and order |
-| Token usage | Weekly bar or line charts, or a 24-week contribution grid; server lifetime and peak daily totals for Codex, local record totals and peak daily usage for Claude |
-| Today's Codex usage | Prefer today's server value; use local records from the connected account when it is zero or unavailable |
-| Token number units | Show integers below 10,000, then Korean units 만 (10,000), 백만 (1 million), 천만 (10 million), and 억 (100 million), with at most one decimal place; promote the unit at rounding boundaries |
+| Quota monitoring | Remaining five-hour and weekly account quotas, reset times, and countdowns |
+| Account management | Connect accounts; configure names, visibility, and order |
+| Token usage | Weekly bar or line charts, or a 24-week contribution grid; lifetime and peak daily totals |
 | Usage information | Hover over `(i)` beside the token usage heading for calculation rules and query status |
 | Session activity | Recent CLI sessions and subagent activity from the connected account |
-| Reset times and notifications | Check whether quota times are fixed after a minimal request; advance, scheduled reset, and schedule-change notifications |
+| Reset times and notifications | Check whether quota times are fixed; advance, scheduled reset, and schedule-change notifications |
 | Reset credits | View remaining credits and expiration dates, and approve credit use in a confirmation dialog |
-| Notification permissions and tests | A section at the top of the Notifications tab shows the settings path, permission status, and test request submission time or failure reason |
-| Service status and updates | View OpenAI service status; install updates and restart from the app; display installed and latest versions with build numbers |
+| Service status and updates | View OpenAI and Claude service status; install updates and restart from the app |
 
-- The four-account limit is shared across Codex and Claude, rather than four accounts per provider
-- Token dates use UTC, with missing data distinct from zero
-- Codex: earlier dates use server-provided history; local data supplements only today's records in the connected account folder
-- Claude: aggregate up to 12 months from the connected folder's Stats cache and session records; exclude web usage, other devices, and account-wide server statistics. Switching accounts in the same folder may include the previous account's records
-- Reset-time checks may consume usage; notifications depend on macOS permissions and system settings
-- Notification permissions: **System Settings → Notifications → Application Notifications**; test records last for the current app session, and successful submission does not guarantee a visible notification banner
+### Token usage rules
+
+- Dates use UTC, with missing data distinct from zero
+- Shows the last 12 months by default; change it with the date range setting
+- Codex
+  - Earlier dates: server-provided history
+  - Today: server value first; local records from the connected account folder when it is zero or unavailable
+- Claude
+  - Aggregated from the connected folder's Stats cache and session records
+  - Excludes web usage, other devices, and account-wide server statistics
+  - Switching accounts in the same folder may include the previous account's records
+
+### Notes
+
+- Reset-time checks may consume usage
+- Notifications depend on macOS notification permissions and system settings
 
 ## Requirements
 
@@ -82,11 +91,10 @@ open "$PWD/dist/CodexQuotaChecker.app"
 
 ## Usage
 
-- Click an account donut to view quotas, token usage, and session activity
-- Center number: remaining five-hour quota; outer ring: remaining overall quota
-- Opening account details queries token usage; use the top-right refresh button for an immediate update
-- Settings control account display, automatic refresh, chart style, date range, notifications, and launch at login
-- Expanding the date range does not add history missing from the Codex server or the connected Claude folder
+- **Register local LLM service folders:** add Codex (`~/.codex`) and Claude (`~/.claude`) account folders in the connection guide or settings
+- **View usage:** click a slot to see the connected service's quotas, token usage, and session activity
+- **Slot numbers:** remaining five-hour usage / weekly account usage
+- **Notifications:** get notified when a quota resets
 
 ## License
 
