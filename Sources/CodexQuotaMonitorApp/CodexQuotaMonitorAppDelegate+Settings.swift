@@ -28,7 +28,7 @@ extension CodexQuotaMonitorAppDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Codex Quota Checker 설정"
+        window.title = "LLM Quota Checker 설정"
         window.isReleasedWhenClosed = false
         window.contentMinSize = SettingsView.minimumWindowSize
         window.contentViewController = NSHostingController(rootView: makeSettingsView())

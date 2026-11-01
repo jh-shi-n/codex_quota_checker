@@ -1,4 +1,4 @@
-# Codex Quota Checker
+# LLM Quota Checker
 
 > **[2026-10-31]** In accordance with Codex's policy on using multiple paid accounts on a single device, registering multiple accounts for the same service in this app is not recommended.
 
@@ -7,7 +7,7 @@
 - Connect up to four Codex and Claude accounts in total, in any combination
 - View connected accounts' quotas, session activity, and token usage in the macOS menu bar and notch
 - An unofficial, independent app built with Codex/Claude
-- Stable release: [0.6.4](https://github.com/jh-shi-n/codex_quota_checker/releases/tag/0.6.4), build `34`
+- Stable release: [0.6.4](https://github.com/jh-shi-n/llm_quota_checker/releases/tag/0.6.4), build `34`
 
 ## Screenshots
 
@@ -67,7 +67,7 @@
 
 ## Installation
 
-1. Download the app ZIP from the [latest release](https://github.com/jh-shi-n/codex_quota_checker/releases/latest).
+1. Download the app ZIP from the [latest release](https://github.com/jh-shi-n/llm_quota_checker/releases/latest).
 2. Extract it, move `CodexQuotaChecker.app` to `/Applications`, and launch it.
 3. If macOS blocks the first launch, verify the source and allow it under **System Settings → Privacy & Security → Open Anyway**.
 4. In the app's connection guide, select the signed-in Codex or Claude account folder and check the connection.
@@ -77,14 +77,18 @@
 - Ad-hoc signed; Developer ID signing and notarization are not included. See [Apple's first-launch guide](https://support.apple.com/en-us/102445).
 - Subsequent updates: **App Settings → App Update → Check for Updates → Install Update and Restart** (buttons currently shown in Korean)
 
+- App display name: **LLM Quota Checker**. The `CodexQuotaChecker.app` filename and internal identifiers are retained for compatibility with existing in-app updates, settings, and usage data.
+- Release ZIPs use `LLMQuotaChecker-<version>-macos-arm64.zip`; a `CodexQuotaChecker-...zip` compatibility copy is also provided for earlier clients.
+- Apps from before the repository rename (0.6.4 and earlier) may fail update checks because they validate the previous repository URL. Version 0.6.5 supports both current and previous URLs.
+
 ### Build from source
 
 - Requires a toolchain supporting Swift tools 6.0 and the macOS SDK
 - The packaging script includes the executable, icon, and resources, and applies ad-hoc signing
 
 ```bash
-git clone https://github.com/jh-shi-n/codex_quota_checker.git
-cd codex_quota_checker
+git clone https://github.com/jh-shi-n/llm_quota_checker.git
+cd llm_quota_checker
 scripts/package_app.sh --output "$PWD/dist" --configuration release
 open "$PWD/dist/CodexQuotaChecker.app"
 ```

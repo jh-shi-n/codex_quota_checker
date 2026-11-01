@@ -149,7 +149,7 @@ final class AppUpdateInstallerTests: XCTestCase {
         let archive = root.appendingPathComponent("update.zip")
         try data.write(to: archive)
         let digest = "sha256:" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let url = URL(string: "https://github.com/jh-shi-n/codex_quota_checker/releases/download/v0.1.0/update.zip")!
+        let url = URL(string: "https://github.com/jh-shi-n/llm_quota_checker/releases/download/v0.1.0/update.zip")!
         let asset = AppReleaseAsset(name: "update.zip", url: url, size: Int64(data.count), digest: digest)
         XCTAssertNoThrow(try AppUpdateInstaller.validateDownload(archive, asset: asset))
         XCTAssertThrowsError(try AppUpdateInstaller.validateDownload(archive,

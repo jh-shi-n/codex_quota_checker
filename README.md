@@ -1,4 +1,4 @@
-# Codex Quota Checker
+# LLM Quota Checker
 
 > **[2026-10-31]** Codex의 "한 기기 내 유료계정 다중 사용 규정"에 따라, 해당 애플리케이션에 동일 서비스 여러 계정을 등록하는 것을 권장하지 않습니다.
 
@@ -7,7 +7,7 @@
 - Codex·Claude 계정 합산 최대 4개 연결 지원 (제공자 구분 없이 조합 가능)
 - macOS 메뉴 막대·노치에서 연결 계정의 할당량, 세션 실행 기록, 토큰 사용량 확인
 - Codex/Claude로 제작한 비공식 독립 앱
-- 정식 릴리스: [0.6.4](https://github.com/jh-shi-n/codex_quota_checker/releases/tag/0.6.4), 빌드 `34`
+- 정식 릴리스: [0.6.4](https://github.com/jh-shi-n/llm_quota_checker/releases/tag/0.6.4), 빌드 `34`
 
 ## 화면 미리보기
 
@@ -67,7 +67,7 @@
 
 ## 설치
 
-1. [최신 릴리스](https://github.com/jh-shi-n/codex_quota_checker/releases/latest)에서 앱 ZIP 다운로드
+1. [최신 릴리스](https://github.com/jh-shi-n/llm_quota_checker/releases/latest)에서 앱 ZIP 다운로드
 2. 압축 해제 후 `CodexQuotaChecker.app`을 `/Applications`로 이동하고 실행
 3. 첫 실행이 차단되면 출처 확인 후 **시스템 설정 → 개인정보 보호 및 보안 → 확인 없이 열기**에서 허용
 4. 앱의 연결 가이드에서 로그인한 Codex 또는 Claude 계정 폴더 선택 후 연결 확인
@@ -77,14 +77,18 @@
 - 임시 서명(ad-hoc) 적용, Developer ID 서명·공증 미적용; 첫 실행 허용은 [Apple 안내](https://support.apple.com/ko-kr/102445) 참고
 - 이후 업데이트: **앱 설정 → 앱 업데이트 → 업데이트 확인 → 업데이트 설치 후 재실행**
 
+- 앱 표시 이름: **LLM Quota Checker**. 기존 앱 내 업데이트·설정·사용량 데이터 호환성을 위해 앱 파일명 `CodexQuotaChecker.app`과 내부 식별자 유지
+- 배포 ZIP은 `LLMQuotaChecker-<버전>-macos-arm64.zip` 사용, 이전 앱을 위한 `CodexQuotaChecker-...zip` 호환 사본 함께 제공
+- 저장소 이름 변경 전 앱(0.6.4 이하)은 업데이트 주소 검증으로 확인에 실패할 수 있음; 0.6.5부터 새 주소·이전 주소 지원
+
 ### 소스 빌드
 
 - Swift tools 6.0 지원 도구 체인과 macOS SDK 필요
 - 패키징 스크립트에서 실행 파일·아이콘·리소스 포함 및 임시 서명 적용
 
 ```bash
-git clone https://github.com/jh-shi-n/codex_quota_checker.git
-cd codex_quota_checker
+git clone https://github.com/jh-shi-n/llm_quota_checker.git
+cd llm_quota_checker
 scripts/package_app.sh --output "$PWD/dist" --configuration release
 open "$PWD/dist/CodexQuotaChecker.app"
 ```
