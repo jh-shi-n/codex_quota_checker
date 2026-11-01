@@ -162,7 +162,7 @@ public final class AccountTokenUsageStore: ObservableObject {
             case .failure: failures.insert(key)
             }
             let today = AccountUsageCalendar.label(now())
-            if snapshots[key]?.days?.contains(where: { $0.date == today }) == true {
+            if snapshots[key]?.days?.contains(where: { $0.date == today && $0.tokens > 0 }) == true {
                 localSnapshots[key] = nil
             } else {
                 let identity = localTodayIdentity(account) ?? ""

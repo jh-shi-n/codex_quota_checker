@@ -9,6 +9,15 @@ public enum AppVersion {
     public static var current: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? fallback
     }
+    public static var build: String? {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+    }
+    public static var display: String { display(version: current, build: build) }
+
+    /// 테스트 접미사를 보존한 버전·빌드 번호 및 누락 상태 표시
+    public static func display(version: String, build: String?) -> String {
+        "\(version) (빌드 \(build ?? "미제공"))"
+    }
 }
 
 /// 안정 릴리스의 숫자 버전 비교와 선행 v 정규화
@@ -47,6 +56,16 @@ public struct AppRelease: Codable, Equatable, Sendable {
     public let version: String
     public let pageURL: URL
     public let asset: AppReleaseAsset?
+    public let build: String?
+    public var displayVersion: String { AppVersion.display(version: version, build: build) }
+
+    /// 이전 캐시·호출부의 빌드 미제공 호환성 유지
+    public init(version: String, pageURL: URL, asset: AppReleaseAsset?, build: String? = nil) {
+        self.version = version
+        self.pageURL = pageURL
+        self.asset = asset
+        self.build = build
+    }
 }
 
 /// 인증·할당량·모델 실행과 무관한 공개 릴리스 전용 조회
@@ -86,7 +105,19 @@ public enum GitHubAppReleaseClient {
         if let candidate, let url = URL(string: candidate.browser_download_url), isRepositoryURL(url, prefix: "/releases/download/") {
             asset = AppReleaseAsset(name: candidate.name, url: url, size: candidate.size, digest: candidate.digest)
         } else { asset = nil }
-        return AppRelease(version: version.text, pageURL: page, asset: asset)
+        return AppRelease(version: version.text, pageURL: page, asset: asset,
+                          build: releaseBuild(body: payload.body, version: version))
+    }
+
+    /// 릴리스 템플릿의 동일 버전 행에서만 빌드 번호 추출
+    private static func releaseBuild(body: String?, version: ReleaseVersion) -> String? {
+        guard let body,
+              let pattern = try? NSRegularExpression(pattern: #"(?m)^[-*][ \t]*앱 버전:[ \t]*`?([^`,\s]+)`?[ \t]*,[ \t]*빌드:[ \t]*`?([0-9]+(?:_test)?)`?[ \t]*\r?$"#),
+              let match = pattern.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
+              let versionRange = Range(match.range(at: 1), in: body),
+              ReleaseVersion(String(body[versionRange])) == version,
+              let buildRange = Range(match.range(at: 2), in: body) else { return nil }
+        return String(body[buildRange])
     }
 
     /// 배포 안내·다운로드 경로의 저장소 범위 제한
@@ -102,6 +133,7 @@ public enum GitHubAppReleaseClient {
         let draft: Bool
         let prerelease: Bool
         let assets: [Asset]
+        let body: String?
     }
 
     /// API의 배포 자산 이름·URL·무결성 정보

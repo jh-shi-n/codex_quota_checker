@@ -34,7 +34,7 @@ final class TokenUsageInformationButtonTests: XCTestCase {
         XCTAssertEqual(string(infoButton, "accessibilityRole"), "AXButton")
         try press(infoButton)
         try await assertPopoverText("토큰 사용량 안내", excluding: host)
-        try await assertPopoverText("오늘 사용량: 서버 값을 우선하고", excluding: host)
+        try await assertPopoverText("당일 사용량: 서버 값을 우선 표기", excluding: host)
         XCTAssertTrue(host.isVisible)
 
         try press(infoButton)

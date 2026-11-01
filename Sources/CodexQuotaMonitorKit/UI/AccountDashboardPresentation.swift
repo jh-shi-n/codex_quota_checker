@@ -167,14 +167,27 @@ public enum AccountDashboardFormatting {
         return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 
-    /// 백만 미만의 원래 숫자와 백만 이상 소수 첫째 자리 축약 표시
+    /// 만·백만·천만·억 단위의 소수 첫째 자리 축약 및 반올림 경계의 단위 승격
     public static func tokenCountText(_ value: Int64) -> String {
-        guard value.magnitude >= 1_000_000 else { return numberText(value) }
+        guard value.magnitude >= 10_000 else { return numberText(value) }
+        let units: [(divisor: Int64, suffix: String)] = [
+            (10_000, "만"), (1_000_000, "백만"), (10_000_000, "천만"), (100_000_000, "억")
+        ]
+        var index = units.lastIndex { value.magnitude >= UInt64($0.divisor) } ?? 0
+        var scaled = Decimal(value) / Decimal(units[index].divisor)
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &scaled, 1, .bankers)
+        if index + 1 < units.count,
+           abs(rounded) >= Decimal(units[index + 1].divisor) / Decimal(units[index].divisor) {
+            index += 1
+            scaled = Decimal(value) / Decimal(units[index].divisor)
+            NSDecimalRound(&rounded, &scaled, 1, .bankers)
+        }
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "ko_KR")
         formatter.numberStyle = .decimal
         formatter.maximumFractionDigits = 1
-        return (formatter.string(from: NSDecimalNumber(decimal: Decimal(value) / 1_000_000)) ?? String(value)) + "백만"
+        return (formatter.string(from: NSDecimalNumber(decimal: rounded)) ?? String(value)) + units[index].suffix
     }
 
     public static func abbreviatedNumber(_ value: Int64) -> String {

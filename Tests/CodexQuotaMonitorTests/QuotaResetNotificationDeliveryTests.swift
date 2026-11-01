@@ -175,13 +175,40 @@ final class QuotaResetNotificationDeliveryTests: XCTestCase {
             onFallback: { fallbacks.append($0) }
         )
 
+        XCTAssertNil(delivery.lastTestRequestedAt)
+        let before = Date()
         await delivery.sendTestNotification()
+        let requestedAt = delivery.lastTestRequestedAt
+        XCTAssertEqual(delivery.lastTestOutcome, .testDelivered)
+        XCTAssertNil(delivery.lastTestError)
+        XCTAssertNotNil(requestedAt)
+        XCTAssertGreaterThanOrEqual(requestedAt ?? .distantPast, before)
+        XCTAssertLessThanOrEqual(requestedAt ?? .distantFuture, Date())
 
         XCTAssertEqual(delivery.status.outcome, .testDelivered)
         XCTAssertEqual(backend.delivered.count, 1)
         XCTAssertEqual(backend.delivered.first?.title, "Codex Quota Checker 테스트 알림")
         XCTAssertTrue(backend.delivered.first?.body.contains("할당량 상태는 변경되지 않습니다") == true)
         XCTAssertTrue(fallbacks.isEmpty)
+        await delivery.notifyReset(makeReset())
+        XCTAssertEqual(delivery.lastTestRequestedAt, requestedAt)
+        XCTAssertEqual(delivery.lastTestOutcome, .testDelivered)
+        backend.status = .denied
+        await delivery.sendTestNotification()
+        XCTAssertEqual(delivery.status.outcome, .testFailed)
+        XCTAssertGreaterThanOrEqual(delivery.lastTestRequestedAt ?? .distantPast, requestedAt ?? .distantFuture)
+        XCTAssertEqual(delivery.lastTestOutcome, .testFailed)
+        XCTAssertEqual(delivery.lastTestError, "macOS 알림 권한이 허용되지 않았습니다.")
+        backend.status = .authorized
+        backend.deliveryError = StubNotificationError.delivery
+        await delivery.sendTestNotification()
+        XCTAssertEqual(delivery.lastTestOutcome, .testFailed)
+        XCTAssertEqual(delivery.lastTestError, delivery.status.deliveryError)
+        XCTAssertNotNil(delivery.lastTestError)
+        backend.deliveryError = nil
+        await delivery.sendTestNotification()
+        XCTAssertEqual(delivery.lastTestOutcome, .testDelivered)
+        XCTAssertNil(delivery.lastTestError)
     }
 
     /// 권한 상태 조회 오류의 사용자 노출 검증

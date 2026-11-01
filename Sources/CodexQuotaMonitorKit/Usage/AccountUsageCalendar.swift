@@ -63,8 +63,8 @@ struct AccountUsageCalendar {
         var segment = 0
         return (0..<count).map { index in
             let date = Self.calendar.date(byAdding: .day, value: index, to: start)!
-            let isLocal = date == today && values[date] == nil && localTokens != nil
-            let tokens = date >= cutoff && date <= today ? (values[date] ?? (isLocal ? localTokens : nil)) : nil
+            let isLocal = date == today && (values[date] == nil || values[date] == 0) && localTokens != nil
+            let tokens = date >= cutoff && date <= today ? (isLocal ? localTokens : values[date]) : nil
             if tokens == nil { segment += 1 }
             return Day(date: date, tokens: tokens, isFuture: date > today, segment: segment, isLocal: isLocal)
         }

@@ -23,6 +23,13 @@ final class AppReleaseUpdateTests: XCTestCase {
         XCTAssertEqual(release.version, "0.1.0")
         XCTAssertEqual(release.asset?.name, "CodexQuotaChecker-0.1.0-macos-arm64.zip")
         XCTAssertNil(try GitHubAppReleaseClient.decode(payload(), architecture: "x86_64").asset)
+        XCTAssertEqual(release.displayVersion, "0.1.0 (빌드 10)")
+        XCTAssertEqual(AppVersion.display(version: "0.6.3", build: "28_test"), "0.6.3 (빌드 28_test)")
+        XCTAssertEqual(AppVersion.display(version: "0.6.3", build: nil), "0.6.3 (빌드 미제공)")
+        for body in ["", "- 앱 버전: `0.0.9`, 빌드: `9`", "- 앱 버전: `0.1.0`, 빌드: `invalid`"] {
+            XCTAssertNil(try GitHubAppReleaseClient.decode(payload(["body": body])).build)
+        }
+        XCTAssertEqual(try GitHubAppReleaseClient.decode(payload(["body": "- 앱 버전: `0.1.0`, 빌드: `10_test`"])).build, "10_test")
     }
 
     /// 사전·비공개 릴리스와 외부 페이지 URL 차단 검증
@@ -40,7 +47,8 @@ final class AppReleaseUpdateTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let release = try GitHubAppReleaseClient.decode(payload())
         let source = ReleaseSource(release: release)
-        let store = AppUpdateStore(currentVersion: "0.0.9", defaults: defaults, fetch: { try await source.read() })
+        let store = AppUpdateStore(currentVersion: "0.0.9", currentBuild: "9_test", defaults: defaults, fetch: { try await source.read() })
+        XCTAssertEqual(store.currentVersionDisplay, "0.0.9 (빌드 9_test)")
         await store.check(force: false)?.value
         XCTAssertTrue(store.updateAvailable)
         XCTAssertNil(store.check(force: false))
@@ -49,6 +57,7 @@ final class AppReleaseUpdateTests: XCTestCase {
         XCTAssertEqual(calls, 2)
         let restored = AppUpdateStore(currentVersion: "0.1.0", defaults: defaults, fetch: { try await source.read() })
         XCTAssertNotNil(restored.lastCheckedAt)
+        XCTAssertEqual(restored.latest?.displayVersion, "0.1.0 (빌드 10)")
         XCTAssertFalse(restored.updateAvailable)
         XCTAssertNil(restored.check(force: false))
     }
@@ -73,6 +82,7 @@ final class AppReleaseUpdateTests: XCTestCase {
     private func payload(_ changes: [String: Any] = [:]) throws -> Data {
         let root = "https://github.com/jh-shi-n/codex_quota_checker"
         var object: [String: Any] = ["tag_name": "v0.1.0", "draft": false, "prerelease": false,
+            "body": "## Codex Quota Checker 0.1.0\n\n- 앱 버전: `0.1.0`, 빌드: `10`\n- 지원 환경: Apple Silicon, macOS 14 이상",
             "html_url": root + "/releases/tag/v0.1.0", "assets": [
                 ["name": "CodexQuotaChecker-0.1.0-source.zip", "size": 12,
                  "browser_download_url": root + "/releases/download/v0.1.0/CodexQuotaChecker-0.1.0-source.zip"],

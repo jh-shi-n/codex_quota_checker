@@ -28,6 +28,7 @@ public struct SettingsView: View {
     public static let refreshSectionTitle = "새로고침"
     public static let activitySectionTitle = "활동 알림"
     public static let quotaResetNotificationSectionTitle = "할당량 초기화 알림"
+    public static let notificationPermissionSectionTitle = "알림 권한 및 테스트"
     public static let notificationPermissionHelp = "사전 알림을 켜거나 권한 요청을 누르면 권한을 요청합니다. 거부한 권한은 시스템 설정에서 변경하세요."
     public static let accountVisibilitySectionTitle = "표시할 계정"
     public static let accountDisplayOrderSectionTitle = "계정 표시 순서"
@@ -453,6 +454,7 @@ public struct SettingsView: View {
 
     /// 조회 주기·활동 알림·할당량 알림 구성
     @ViewBuilder private var notificationSections: some View {
+        notificationPermissionSection
         Section(Self.refreshSectionTitle) {
             Toggle("주기 조회", isOn: $automaticRefreshEnabled)
             Text("주기 조회를 꺼도 앱 시작 시 조회와 수동 새로고침은 실행됩니다.")
@@ -504,9 +506,15 @@ public struct SettingsView: View {
             Text("초기화 시각이 확정되면 해당 시각에 다시 조회하고 도달 알림을 보냅니다. 사전 알림을 꺼도 도달 알림은 보냅니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 알림 탭 상단의 macOS 권한·테스트 요청 기록 및 관련 동작 구성
+    private var notificationPermissionSection: some View {
+        Section(Self.notificationPermissionSectionTitle) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("권한: \(notificationAuthorizationText)")
-                Text("전달: \(notificationOutcomeText)")
+                Text("권한: 설정 - 알림 - 응용프로그램 알림 — \(notificationAuthorizationText)")
+                Text("테스트 기록: \(Self.notificationTestRecordText(requestedAt: notificationDelivery.lastTestRequestedAt, outcome: notificationDelivery.lastTestOutcome, error: notificationDelivery.lastTestError))")
                     .foregroundStyle(.secondary)
                 if let error = notificationDelivery.status.authorizationError {
                     Text("권한 오류: \(error)")
@@ -536,9 +544,9 @@ public struct SettingsView: View {
         }
     }
 
-    /// 설치 앱의 번들 버전 표시 및 소스 미리보기의 현재 릴리스 기본값
+    /// 설치 앱의 번들 버전·빌드 번호 및 테스트 접미사 표시
     private var appVersion: String {
-        AppVersion.current
+        AppVersion.display
     }
 
     private var refreshIntervalBinding: Binding<Int> {
@@ -572,28 +580,29 @@ public struct SettingsView: View {
     /// 목적: 권한 상태의 사용자 표시 문구 제공
     private var notificationAuthorizationText: String {
         switch notificationDelivery.status.authorization {
-        case .checking: "상태를 확인하고 있습니다."
-        case .notRequested: "아직 권한을 요청하지 않았습니다."
-        case .denied: "꺼져 있습니다. 시스템 설정에서 허용하세요."
-        case .authorized: "허용되어 있습니다."
-        case .provisional: "임시로 허용되어 있습니다."
-        case .ephemeral: "임시로 허용되어 있습니다."
-        case .unavailable: "앱 번들에서 실행해야 사용할 수 있습니다."
-        case .unknown: "상태를 알 수 없습니다."
-        case .error: "상태를 확인하지 못했습니다."
+        case .checking: "확인 중"
+        case .notRequested: "요청 전"
+        case .denied: "허용 안 됨"
+        case .authorized: "허용됨"
+        case .provisional: "조용한 알림만 임시 허용됨"
+        case .ephemeral: "일시 허용됨"
+        case .unavailable: "확인 불가 · 앱 번들 실행 필요"
+        case .unknown: "알 수 없음"
+        case .error: "조회 실패"
         }
     }
 
-    /// 목적: 마지막 시스템 알림 전달 결과의 사용자 표시 문구 제공
-    private var notificationOutcomeText: String {
-        switch notificationDelivery.status.outcome {
-        case .idle: "전달 기록이 없습니다."
-        case .delivered: "시스템 알림을 전달했습니다."
-        case .fallback: "노치 활동 알림으로 대신 표시했습니다."
-        case .testDelivered: "테스트 알림을 전달했습니다."
-        case .testFailed: "테스트 알림을 전달하지 못했습니다."
-        case .failed: "시스템 알림을 전달할 수 없습니다."
-        }
+    /// 테스트 미요청·전송 중·전송 성공 시각 또는 실패 원인 표시
+    public static func notificationTestRecordText(
+        requestedAt: Date?, outcome: QuotaResetNotificationOutcome = .testDelivered, error: String? = nil
+    ) -> String {
+        guard let requestedAt else { return "요청된 테스트 없습니다" }
+        if outcome == .testFailed { return "요청 실패 : \(error ?? "알림 요청을 전송하지 못했습니다.")" }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let label = outcome == .testDelivered ? "요청 전송됨" : "요청 전송 중"
+        return "\(label) [\(formatter.string(from: requestedAt))]"
     }
 
     /// 목적: 앱 번들과 권한 상태에 따른 알림 동작 버튼 활성 여부

@@ -12,9 +12,9 @@ public struct AppUpdateSettingsSection: View {
 
     public var body: some View {
         Section("앱 업데이트") {
-            LabeledContent("현재 버전", value: store.currentVersion)
+            LabeledContent("현재 버전", value: store.currentVersionDisplay)
             if let latest = store.latest {
-                LabeledContent("최신 릴리스", value: latest.version)
+                LabeledContent("최신 릴리스", value: latest.displayVersion)
             }
             HStack {
                 Text(store.isInstalling ? "다운로드·검증 후 앱을 재실행합니다." : statusText)
