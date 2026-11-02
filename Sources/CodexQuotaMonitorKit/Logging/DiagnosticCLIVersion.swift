@@ -20,6 +20,9 @@ extension DiagnosticLogContext {
             let ended = DispatchSemaphore(value: 0)
             process.executableURL = executable
             process.arguments = ["--version"]
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = CodexProcess.childPath(inheritedPath: environment["PATH"], executable: executable)
+            process.environment = environment
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = output
             process.standardError = FileHandle.nullDevice
