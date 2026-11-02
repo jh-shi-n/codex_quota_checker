@@ -252,18 +252,30 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
     }
 
     /// GUI 실행 환경에서도 CLI와 Node 런타임 탐색이 가능한 자식 프로세스 경로 구성
-    static func childPath(inheritedPath: String?, executable: URL) -> String {
-        let preferredDirectories = [
-            executable.deletingLastPathComponent().standardizedFileURL.path,
-            "/opt/homebrew/bin",
-            "/opt/homebrew/sbin",
-        ]
+    static func childPath(
+        inheritedPath: String?,
+        executable: URL,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        systemDirectories: [String] = ["/opt/homebrew/bin", "/opt/homebrew/sbin"]
+    ) -> String {
+        let preferredDirectories = [executable.deletingLastPathComponent().standardizedFileURL.path]
+            + CLIPathDiscovery.nodeDirectories(forExecutable: executable)
+            + systemDirectories
         let inheritedDirectories = (inheritedPath ?? "")
             .split(separator: ":")
             .map(String.init)
 
+        var directories = preferredDirectories + inheritedDirectories
+        // npm 전역 폴더처럼 CLI와 Node가 분리된 설치의 마지막 순위 Node 보완
+        if !directories.contains(where: CLIPathDiscovery.containsNode),
+           let node = CLIPathDiscovery.managedBinDirectories(homeDirectory: homeDirectory)
+            .map(\.path)
+            .first(where: CLIPathDiscovery.containsNode) {
+            directories.append(node)
+        }
+
         var seen = Set<String>()
-        return (preferredDirectories + inheritedDirectories)
+        return directories
             .filter { !$0.isEmpty && seen.insert($0).inserted }
             .joined(separator: ":")
     }

@@ -56,22 +56,38 @@ public struct ClaudeCLI: Sendable {
         self.timeout = timeout
     }
 
-    /// 셸 실행 없이 PATH·사용자 기본 설치 경로에서 CLI 탐색
+    /// PATH·사용자 기본 설치 경로·버전 관리자 순서의 CLI 탐색, 모두 실패 시 로그인 셸 PATH 확인
     public static func locate() -> URL? {
-        let environment = ProcessInfo.processInfo.environment
-        let paths = (environment["PATH"] ?? "").split(separator: ":").map {
-            URL(fileURLWithPath: String($0)).appendingPathComponent("claude")
-        } + [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/claude"),
-             URL(fileURLWithPath: "/opt/homebrew/bin/claude"), URL(fileURLWithPath: "/usr/local/bin/claude")]
-        return paths.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+        locate(environment: ProcessInfo.processInfo.environment,
+               homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
     }
 
-    /// 기본 폴더의 키체인 식별 유지 및 커스텀 설정 폴더 격리
+    /// 탐색 입력을 주입하는 CLI 탐색, `candidatePaths` 생략 시 사용자 기본 설치 경로 사용
+    static func locate(environment: [String: String], homeDirectory: URL, candidatePaths: [URL]? = nil,
+                       loginShellPath: @Sendable () -> String? = CLIPathDiscovery.sharedLoginShellPath) -> URL? {
+        CLIPathDiscovery.locate(
+            name: "claude",
+            pathEnvironment: environment["PATH"],
+            candidatePaths: candidatePaths ?? [
+                homeDirectory.appendingPathComponent(".local/bin/claude"),
+                URL(fileURLWithPath: "/opt/homebrew/bin/claude"),
+                URL(fileURLWithPath: "/usr/local/bin/claude"),
+            ],
+            homeDirectory: homeDirectory,
+            loginShellPath: loginShellPath
+        )
+    }
+
+    /// 기본 폴더의 키체인 식별 유지 및 커스텀 설정 폴더 격리, 실행 파일 지정 시 Node 탐색 PATH 보정
     public static func environment(home: URL, inherited: [String: String] = ProcessInfo.processInfo.environment,
-                                   userHome: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String: String] {
+                                   userHome: URL = FileManager.default.homeDirectoryForCurrentUser,
+                                   executable: URL? = nil) -> [String: String] {
         var environment = inherited
         for key in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR"] {
             environment.removeValue(forKey: key)
+        }
+        if let executable {
+            environment["PATH"] = CodexProcess.childPath(inheritedPath: environment["PATH"], executable: executable, homeDirectory: userHome)
         }
         if home.resolvingSymlinksInPath().standardizedFileURL != userHome.appendingPathComponent(".claude").resolvingSymlinksInPath().standardizedFileURL {
             environment["CLAUDE_CONFIG_DIR"] = home.path
@@ -93,7 +109,7 @@ public struct ClaudeCLI: Sendable {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
-        process.environment = Self.environment(home: home)
+        process.environment = Self.environment(home: home, executable: executable)
         process.currentDirectoryURL = home
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
