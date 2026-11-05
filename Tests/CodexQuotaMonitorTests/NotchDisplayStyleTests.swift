@@ -47,10 +47,24 @@ final class NotchDisplayStyleTests: XCTestCase {
         let presentation = NotchQuotaPresentation(account: account)
         XCTAssertEqual(presentation.fiveHour, 92)
         XCTAssertEqual(presentation.overall, 0)
+        XCTAssertEqual(presentation.numberPercent, 92)
         XCTAssertEqual(QuotaDonutPresentation(account: account).centerPercent, 0)
         let partial = NotchQuotaPresentation(account: AccountState(id: "C1", primaryRemainingPercent: 35, status: .normal))
         XCTAssertEqual(partial.fiveHour, 35)
         XCTAssertNil(partial.overall)
+        XCTAssertEqual(partial.numberPercent, 35)
+        for plan in ["plus", "pro", "team", "business", "enterprise"] {
+            for status: AccountStatus in [.normal, .loading, .timeout, .error] {
+                let overallOnly = NotchQuotaPresentation(account: AccountState(
+                    id: "C1", planType: plan, secondaryRemainingPercent: 72, status: status))
+                XCTAssertNil(overallOnly.fiveHour)
+                XCTAssertEqual(overallOnly.overall, 72)
+                XCTAssertEqual(overallOnly.text(overallOnly.numberPercent), "72")
+            }
+        }
+        let exhausted = NotchQuotaPresentation(account: AccountState(
+            id: "C1", planType: "pro", secondaryRemainingPercent: 0, status: .normal))
+        XCTAssertEqual(exhausted.text(exhausted.numberPercent), "0")
     }
 
     /// 조회 중 캐시 유지와 인증 불가 상태의 이전 값 숨김 검증
@@ -64,6 +78,7 @@ final class NotchDisplayStyleTests: XCTestCase {
             let value = NotchQuotaPresentation(account: AccountState(id: "C1", remainingPercent: 35, status: status))
             XCTAssertNil(value.fiveHour)
             XCTAssertNil(value.overall)
+            XCTAssertNil(value.numberPercent)
         }
         XCTAssertEqual(NotchQuotaPresentation(account: .loading(id: "C1")).text(nil), "…")
         XCTAssertEqual(NotchQuotaPresentation(account: AccountState(id: "C1", status: .loginRequired)).text(nil), "!")

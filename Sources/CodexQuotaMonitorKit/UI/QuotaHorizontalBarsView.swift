@@ -4,13 +4,13 @@
 // 실행 예시: QuotaHorizontalBarsView(presentation: value)
 import SwiftUI
 
-/// 위 5시간 숫자와 아래 5시간·전체 막대
+/// 5시간 우선·전체 보완 숫자와 독립된 5시간·전체 막대
 struct QuotaHorizontalBarsView: View {
     let presentation: NotchQuotaPresentation
 
     var body: some View {
         VStack(spacing: 4) {
-            Text(presentation.text(presentation.fiveHour))
+            Text(presentation.text(presentation.numberPercent))
                 .font(.system(size: 15, weight: .semibold, design: .monospaced))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)

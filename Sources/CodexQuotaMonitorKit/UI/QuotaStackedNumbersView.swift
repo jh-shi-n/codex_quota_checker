@@ -1,20 +1,20 @@
-// 목적: 위 5시간·아래 전체 숫자 노치 그래픽 구성
+// 목적: 위 5시간 우선·전체 보완 숫자와 아래 전체 숫자 노치 그래픽 구성
 // 이용처: 노치와 설정 미리보기
 // 사용방법: 정규화된 표시 모델 전달
 // 실행 예시: QuotaStackedNumbersView(presentation: value)
 import SwiftUI
 
-/// 값 색상의 5시간 숫자와 고정 회색의 전체 숫자
+/// 잔여량 색상의 대표 숫자와 고정 회색의 전체 숫자
 struct QuotaStackedNumbersView: View {
     let presentation: NotchQuotaPresentation
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(presentation.text(presentation.fiveHour))
+            Text(presentation.text(presentation.numberPercent))
                 .font(.system(size: QuotaStackedNumbersMetrics.primaryFontSize, weight: .semibold, design: .monospaced))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: true)
-                .foregroundStyle(NotchQuotaPresentation.color(for: presentation.fiveHour).swiftUIColor)
+                .foregroundStyle(NotchQuotaPresentation.color(for: presentation.numberPercent).swiftUIColor)
                 .frame(width: 22, height: 12)
             Text(presentation.text(presentation.overall))
                 .font(.system(size: QuotaStackedNumbersMetrics.secondaryFontSize, weight: .regular, design: .monospaced))
