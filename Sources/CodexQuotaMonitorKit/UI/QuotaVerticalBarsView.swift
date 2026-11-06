@@ -9,7 +9,7 @@ struct QuotaVerticalBarsView: View {
     let presentation: NotchQuotaPresentation
 
     var body: some View {
-        let text = presentation.text(presentation.fiveHour)
+        let text = presentation.text(presentation.numberPercent)
         HStack(spacing: 1) {
             Text(text)
                 .font(.system(size: QuotaVerticalBarsMetrics.fontSize(for: text),

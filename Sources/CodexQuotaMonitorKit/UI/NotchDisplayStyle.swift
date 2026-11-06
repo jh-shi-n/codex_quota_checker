@@ -40,6 +40,8 @@ public enum NotchDisplayStyle: String, CaseIterable, Sendable {
 struct NotchQuotaPresentation {
     let fiveHour: Double?
     let overall: Double?
+    /// 5시간 한도 미제공 시 전체 잔여량으로 보완하는 대표 숫자
+    var numberPercent: Double? { fiveHour ?? overall }
     let placeholder: String
     static let track = QuotaRGB(red: 0x3A, green: 0x3A, blue: 0x3A)
     static let secondary = QuotaRGB(red: 0x9A, green: 0x9A, blue: 0x9A)
